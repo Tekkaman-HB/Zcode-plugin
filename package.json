@@ -1,0 +1,114 @@
+{
+  "name": "zcode-vscode",
+  "displayName": "Zcode plan tool",
+  "description": "ZCode for VSCode — Z.ai 智能编程助手，复用桌面端账户认证，对接 ZCode CLI 协议",
+  "version": "0.5.0",
+  "publisher": "huangbing",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "zcode-sidebar",
+          "title": "ZCode",
+          "icon": "media/zcode.svg"
+        }
+      ]
+    },
+    "views": {
+      "zcode-sidebar": [
+        {
+          "type": "webview",
+          "id": "zcode.chat",
+          "name": "ZCode"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "zcode.sidebar.open",
+        "title": "ZCode: Open Sidebar",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "zcode.newSession",
+        "title": "ZCode: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "zcode.stop",
+        "title": "ZCode: Stop",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "zcode.login",
+        "title": "ZCode: Login"
+      },
+      {
+        "command": "zcode.logout",
+        "title": "ZCode: Logout"
+      },
+      {
+        "command": "zcode.openInDesktopApp",
+        "title": "ZCode: Open in Desktop App"
+      }
+    ],
+    "configuration": {
+      "title": "ZCode",
+      "properties": {
+        "zcode.appPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "ZCode 桌面端安装路径（如 `/Applications/ZCode.app`）。留空则按平台默认路径探测。"
+        },
+        "zcode.nodePath": {
+          "type": "string",
+          "default": "",
+          "description": "运行 zcode CLI 所用的 Node 可执行文件路径。留空则依次尝试 PATH 中的 node、VSCode 内置 Node。"
+        },
+        "zcode.defaultMode": {
+          "type": "string",
+          "enum": [
+            "build",
+            "edit",
+            "plan",
+            "yolo"
+          ],
+          "default": "build",
+          "description": "新会话的默认权限模式。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "typecheck": "tsc --noEmit",
+    "watch": "node esbuild.js --watch",
+    "smoke": "node esbuild.js && node out/scripts/smoke.js",
+    "ui-preview": "node scripts/ui-preview.mjs",
+    "theme-check": "node scripts/theme-check.mjs",
+    "package": "npm run build && vsce package --allow-missing-repository"
+  },
+  "dependencies": {
+    "marked": "^15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.95.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "@vscode/vsce": "^3.0.0"
+  },
+  "icon": "media/icon.png"
+}

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/out/webview/styles.css">
+<title>ZCode UI 验收</title>
+</head>
+<body>
+<!-- 验收工具条（仅本页；?theme= 参数模式下自动隐藏） -->
+<div id="harness" style="position:fixed;top:8px;right:8px;z-index:999;display:flex;gap:4px;font:500 11px/1 Inter,sans-serif">
+  <button data-th="">亮色</button>
+  <button data-th="dark">暗色</button>
+  <button data-th="hc">高对比</button>
+  <button data-th="hclight">高对比亮</button>
+  <button id="cmp">并排对比</button>
+</div>
+<style>
+  #harness button { height:22px;padding:0 9px;border-radius:999px;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink-2);cursor:pointer }
+  #harness button:hover { background:var(--hover);color:var(--ink) }
+</style>
+<div id="app">
+  <div class="chat-titlebar">
+    <div class="chat-title">ZCode · 逆向侦察权限流</div>
+    <div class="titlebar-actions">
+      <button class="titlebar-btn" title="历史会话">🕐</button>
+      <button class="titlebar-btn" title="新会话">＋</button>
+    </div>
+  </div>
+  <div class="messages">
+
+    <div class="msg msg-user-block">
+      <div class="msg-user-text">帮我修一下登录页的空指针，顺便把按钮间距调匀一点</div>
+      <button class="msg-attachment msg-attachment-btn msg-attachment-img"><img class="msg-attach-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Crect width='40' height='40' fill='%23bfe0ff'/%3E%3C/svg%3E" alt="screenshot.png"><span class="attach-chip-name">screenshot.png</span></button>
+    </div>
+
+    <div class="msg msg-assistant">
+      <details class="reasoning" open><summary>✻ 思考过程</summary><div class="md reasoning-body">空指针出现在 handleSubmit 里未判空就读了 state.user.profile…</div></details>
+      <div class="md"><p>问题定位在 <code>handleSubmit</code>：未登录时 <code>state.user</code> 为 <strong>null</strong>。我先加判空，再调按钮间距：</p></div>
+      <div class="tool-card">
+        <div class="tool-card-header"><span class="tool-status-icon tool-status-completed">✓</span><span class="tool-card-name">Edit</span><span class="tool-card-summary">login.tsx</span><span class="tool-chevron">▾</span></div>
+        <div class="tool-card-body"><div class="tool-card-section"><div class="tool-card-label">diff · login.tsx</div>
+          <div class="json-block">
+            <div class="diff-line diff-ctx">const profile = state.user?.profile</div>
+            <div class="diff-line diff-del">- if (state.user.profile.name) {</div>
+            <div class="diff-line diff-add">+ if (profile?.name) {</div>
+            <div class="diff-line diff-ctx">&nbsp;&nbsp;submit(profile)</div>
+          </div>
+        </div></div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-card-header"><span class="tool-status-icon tool-status-running">▶</span><span class="tool-card-name">Bash</span><span class="tool-card-summary">npm run typecheck</span><span class="tool-chevron">▾</span></div>
+        <div class="tool-card-body"><div class="tool-card-section"><div class="tool-card-label">输出</div><pre class="json-block">tsc --noEmit …</pre></div></div>
+      </div>
+      <div class="md raw streaming">修改完成，类型检查通过。按钮间距从 4px 统一到 8px：</div>
+    </div>
+
+    <div class="thinking-cursor msg msg-assistant">
+      <span class="think-pixel"><span class="think-px" style="animation-delay:0ms"></span><span class="think-px" style="animation-delay:140ms"></span><span class="think-px" style="animation-delay:280ms"></span><span class="think-px" style="animation-delay:90ms"></span><span class="think-px" style="animation-delay:230ms"></span><span class="think-px" style="animation-delay:370ms"></span><span class="think-px" style="animation-delay:180ms"></span><span class="think-px" style="animation-delay:320ms"></span><span class="think-px" style="animation-delay:460ms"></span></span>
+      <span class="think-label">思考中…</span><span class="think-secs">12s</span>
+    </div>
+
+    <div class="permission-card risk-medium" tabindex="0">
+      <div class="ix-tabs"><span class="ix-tab active">1. 需要权限确认</span><span class="ix-tab">2. 实现方案</span><span class="ix-hint">1/2</span></div>
+      <div class="permission-title">需要权限确认 · Bash <span class="origin-badge">子智能体</span></div>
+      <div class="permission-reason">需要运行测试来验证修改</div>
+      <div class="perm-preview"><div class="tool-card-label">将要执行</div><pre class="json-block">npm test -- login.spec.ts</pre></div>
+      <div class="perm-options">
+        <button class="perm-option kind-allowOnce focused" aria-selected="true"><span class="perm-num">1.</span><span class="perm-opt-body"><span class="perm-name">允许一次</span><span class="perm-desc">仅本次操作生效</span></span></button>
+        <button class="perm-option kind-allowAlways"><span class="perm-num">2.</span><span class="perm-opt-body"><span class="perm-name">在此项目始终允许</span><span class="perm-desc">同类请求不再询问</span><span class="perm-scopes"><code class="perm-scope">npm test …</code></span></span></button>
+        <button class="perm-option kind-denyOnce"><span class="perm-num">3.</span><span class="perm-opt-body"><span class="perm-name">拒绝</span><span class="perm-desc">拒绝本次请求</span></span></button>
+      </div>
+      <div class="perm-feedback-row"><textarea class="ui-custom-textarea perm-feedback" rows="1" placeholder="拒绝时可附说明（可选）"></textarea></div>
+      <div class="permission-footer"><span class="perm-kbd-hint">↑↓ 选择 · Enter 确认 · 数字键直选 · Esc 拒绝</span><button class="permission-btn primary">确认</button></div>
+    </div>
+
+    <div class="user-input-card" tabindex="0">
+      <div class="permission-title">AskUserQuestion</div>
+      <div class="ix-pager"><button disabled>‹</button><span class="ix-dots"><span class="ix-dot answered"></span><span class="ix-dot current"></span><span class="ix-dot"></span></span><span class="ix-pager-pos">2 / 3</span><button>›</button></div>
+      <div class="ui-q-header"><span class="q-badge">实现方案</span></div>
+      <div class="ui-q-text">按钮间距想统一到哪个基准？</div>
+      <div class="ui-choices">
+        <button class="ui-choice"><span class="opt-num">1.</span><span class="opt-body"><span class="opt-label">8px 网格</span><span class="opt-desc">对齐设计系统</span></span></button>
+        <button class="ui-choice selected"><span class="opt-num">2.</span><span class="opt-body"><span class="opt-label">4px 网格</span><span class="opt-desc">更紧凑</span></span></button>
+        <div class="ui-choice ui-custom-row"><span class="opt-num">3.</span><textarea class="ui-custom-textarea" rows="1" placeholder="或输入自定义回答…"></textarea></div>
+      </div>
+      <div class="ui-preview"><p>预览：按钮组间距 = <strong>8px</strong>，与卡片内边距对齐，视觉基线一致。</p></div>
+      <div class="permission-footer"><span class="perm-kbd-hint">↑↓ 选择 · Enter 确认 · Esc 取消</span><div class="permission-actions"><button class="permission-btn">取消</button><button class="permission-btn primary">继续</button></div></div>
+    </div>
+
+  </div>
+
+<!-- 遮罩 + 空态欢迎页（chat.ts renderOverlay 的 DOM 形状：.overlay 默认隐藏，.visible 显示） -->
+<div class="overlay visible" id="gate-mock">
+  <div class="gate subtle">
+    <div class="gate-logo small" style="background:#18181a">Z</div>
+    <div class="gate-title">开始你的第一次对话</div>
+    <div class="gate-hint">ZCode 由 GLM 驱动，可读写文件、执行命令、搜索代码库</div>
+    <div class="gate-suggestions">
+      <button class="gate-suggestion">帮我分析这个项目的结构</button>
+      <button class="gate-suggestion">修复当前的 TypeScript 编译错误</button>
+      <button class="gate-suggestion">为这个函数写单元测试</button>
+    </div>
+  </div>
+</div>
+
+  <div class="composer">
+    <div class="composer-inner">
+      <div class="attach-row"><span class="attach-chip"><img class="attach-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Crect width='34' height='34' fill='%23bff3dd'/%3E%3C/svg%3E" alt="err.png"><span class="attach-chip-name">err.png</span><button class="attach-chip-x">×</button></span></div>
+      <textarea class="composer-input" rows="1" placeholder="给 ZCode 发送消息…（/ 查看命令）"></textarea>
+      <div class="composer-bar">
+        <div class="composer-bar-left">
+          <button class="bar-icon-btn">＋</button><button class="bar-icon-btn">@</button>
+          <button class="composer-chip">GLM-5.3</button><button class="bar-icon-btn">⚙</button>
+        </div>
+        <div class="composer-bar-right">
+          <button class="composer-chip">变更前确认</button>
+          <button class="send-btn">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  // 工具条追加"欢迎页"开关：验证 overlay 显示/隐藏两态
+  var toggle = document.createElement('button');
+  toggle.textContent = '欢迎页';
+  toggle.addEventListener('click', function () {
+    // 镜像 chat.ts renderOverlay：gate 显示时同步收起消息区（欢迎区独占弹性位）
+    var on = document.getElementById('gate-mock').classList.toggle('visible');
+    document.querySelector('.messages').style.display = on ? 'none' : '';
+  });
+  // 初始态镜像：mock 自带 visible → 收起消息区
+  document.querySelector('.messages').style.display = 'none';
+  document.getElementById('harness').append(toggle);
+  // 主题参数 → body 类；顶层页保留工具条（深链可继续切换），iframe 内隐藏工具条防嵌套控件
+  var params = new URLSearchParams(location.search);
+  var theme = params.get('theme') || '';
+  var applyTheme = function (th) {
+    document.body.classList.remove('vscode-dark', 'vscode-high-contrast', 'vscode-high-contrast-light');
+    if (th === 'dark') document.body.classList.add('vscode-dark');
+    if (th === 'hc') document.body.classList.add('vscode-high-contrast');
+    if (th === 'hclight') document.body.classList.add('vscode-high-contrast-light');
+  };
+  if (theme) applyTheme(theme === 'dark' ? 'dark' : theme === 'hc' ? 'hc' : theme === 'hclight' ? 'hclight' : '');
+  if (theme && window.self !== window.top) {
+    var harness = document.getElementById('harness');
+    if (harness) harness.remove();
+    return;
+  }
+  // 顶层页：工具条切换主题
+  var buttons = document.querySelectorAll('#harness button[data-th]');
+  buttons.forEach(function (b) { b.addEventListener('click', function () { applyTheme(b.dataset.th); }); });
+  // 并排对比：隐藏本体，双 iframe 同页双主题
+  document.getElementById('cmp').addEventListener('click', function () {
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:998;display:flex;gap:0;background:var(--canvas)';
+    var self = location.pathname;
+    [['light', '亮色'], ['dark', '暗色'], ['hc', '高对比']].forEach(function (pair) {
+      var cell = document.createElement('div');
+      cell.style.cssText = 'flex:1;display:flex;flex-direction:column;min-width:0';
+      var label = document.createElement('div');
+      label.style.cssText = 'padding:6px 10px;font:600 11px Inter,sans-serif;color:var(--ink-2);background:var(--surface);border-bottom:1px solid var(--line)';
+      label.textContent = pair[1];
+      var frame = document.createElement('iframe');
+      frame.src = self + '?theme=' + pair[0];
+      frame.style.cssText = 'flex:1;border:none;width:100%';
+      cell.append(label, frame);
+      wrap.append(cell);
+    });
+    var back = document.createElement('button');
+    back.textContent = '✕ 退出对比';
+    back.style.cssText = 'position:fixed;bottom:10px;left:10px;z-index:999;height:24px;padding:0 10px;border-radius:999px;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);font:500 11px Inter,sans-serif;cursor:pointer;box-shadow:var(--shadow-card)';
+    back.addEventListener('click', function () { wrap.remove(); back.remove(); });
+    document.body.append(wrap, back);
+  });
+})();
+</script>
+</body>
+</html>

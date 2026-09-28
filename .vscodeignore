@@ -1,0 +1,15 @@
+.vscode/**
+node_modules/**
+src/**
+scripts/**
+out/scripts/**
+tsconfig.json
+esbuild.js
+**/*.map
+CLAUDE.md
+.mimosa/**
+*.vsix
+zcode-smoke-marker.txt
+media/fonts/**
+.gitignore
+*.png
