@@ -8,7 +8,7 @@ import type { AvailableModel } from '../../protocol/types';
 import type { FromWebviewMessage } from '../bridge';
 import { h, relTime } from './render';
 import { MODE_ICONS } from './icons';
-import { formatTokens, fmtContext, sourceLabel } from './format';
+import { formatTokens, fmtContext, sourceLabel, sourceColor, formatTokensLocale, fmtContextLocale } from './format';
 import type { ChatSessionState } from './events';
 import type { Locale, Translate } from './i18n';
 
@@ -196,26 +196,46 @@ export class MenuController {
     const window = host.authoritativeWindow();
     const used = Math.min(proj.contextUsed, window);
     const pct = window > 0 ? Math.round((used / window) * 1000) / 10 : 0;
-    const list = h('div', { class: 'menu account-menu' });
-    list.append(h('div', { class: 'menu-item static' },
-      h('span', { class: 'ctx-title' }, host.t('context')),
-      h('span', { class: 'menu-item-meta' }, `${formatTokens(used)}/${fmtContext(window)} (${pct}%)`)
+    const zh = host.locale === 'zh-CN';
+    const list = h('div', { class: 'menu ctx-menu' });
+
+    // 标题行：左标题，右 已用/窗口（%）（zh 用万计量，对标桌面端"31.6万/100万（31.6%）"）
+    const usedText = zh ? formatTokensLocale(used, host.locale) : formatTokens(used);
+    const winText = zh ? fmtContextLocale(window, host.locale) : fmtContext(window);
+    const headMeta = zh
+      ? `${usedText}/${winText}（${pct}%）`
+      : `${usedText}/${winText} (${pct}%)`;
+    list.append(h('div', { class: 'ctx-head' },
+      h('span', { class: 'ctx-title' }, host.t('contextCapacity')),
+      h('span', { class: 'ctx-head-meta' }, headMeta)
     ));
-    list.append(h('div', { class: 'ctx-progress' }, h('span', { class: 'ctx-progress-fill', style: `width:${Math.min(100, pct)}%` })));
-    // 分来源占比：session.updated 的 contextUsageBreakdown（真实上下文组成，chars）
-    if (host.ctxBreakdown?.length) {
-      const totalChars = host.ctxBreakdown.reduce((a, b) => a + b.chars, 0);
-      if (totalChars > 0) {
-        list.append(h('div', { class: 'menu-sep' }));
-        for (const e of [...host.ctxBreakdown].sort((a, b) => b.chars - a.chars)) {
-          const share = Math.round((e.chars / totalChars) * 1000) / 10;
-          list.append(h('div', { class: 'menu-item static' },
-            h('span', { class: 'menu-item-label' }, h('span', { class: 'mcp-dot ok' }, '●'), h('span', {}, sourceLabel(e.source))),
-            h('span', { class: 'menu-item-meta' }, `${share}% · ${formatTokens(e.chars)}`)
-          ));
-        }
+
+    // 分段色条：填充 = 窗口占比；段 = 各来源在已用中的份额（与下方彩点同色）
+    const bar = h('div', { class: 'ctx-segbar' });
+    const fill = h('div', { class: 'ctx-segbar-fill', style: `width:${Math.min(100, pct)}%` });
+    const breakdown = [...(host.ctxBreakdown ?? [])].sort((a, b) => b.chars - a.chars);
+    const totalChars = breakdown.reduce((a, b) => a + b.chars, 0);
+    if (totalChars > 0) {
+      for (const e of breakdown) {
+        fill.append(h('span', { class: 'ctx-seg', style: `width:${((e.chars / totalChars) * 100).toFixed(2)}%;background:${sourceColor(e.source)}` }));
       }
+    } else {
+      fill.append(h('span', { class: 'ctx-seg', style: 'flex:1;background:var(--accent)' }));
     }
+    bar.append(fill);
+    list.append(bar);
+
+    // 来源行：彩点 + 标签 | 百分比右对齐（chars 收进 hover 提示）
+    const rows = h('div', { class: 'ctx-rows' });
+    for (const e of breakdown) {
+      const share = totalChars > 0 ? Math.round((e.chars / totalChars) * 1000) / 10 : 0;
+      rows.append(h('div', { class: 'ctx-row', title: `${sourceLabel(e.source, host.locale)} · ${formatTokens(e.chars)} chars` },
+        h('span', { class: 'ctx-dot', style: `background:${sourceColor(e.source)}` }),
+        h('span', { class: 'ctx-row-label' }, sourceLabel(e.source, host.locale)),
+        h('span', { class: 'ctx-row-pct' }, `${share}%`)
+      ));
+    }
+    list.append(rows);
     this.showPopup(host.ctxRingBtn, list);
   }
 

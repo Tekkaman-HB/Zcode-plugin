@@ -756,9 +756,24 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 /* MCP / 账户菜单 */
 .mcp-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex: none; }
 .mcp-server-name { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ctx-title { padding: 6px 10px 4px; font-size: 10.5px; font-weight: 600; color: var(--ink-3); }
-.ctx-progress { height: 5px; border-radius: 3px; background: var(--inset); margin: 4px 10px 8px; overflow: hidden; }
-.ctx-progress-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 320ms var(--ease-out); }
+/* 上下文弹层（对标桌面端"上下文容量"：标题行 + 分段色条 + 彩点来源行） */
+.ctx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; }
+.ctx-head .ctx-title { padding: 0; font-size: 13px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+.ctx-head-meta { font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; }
+.ctx-segbar { height: 6px; border-radius: 3px; background: var(--inset); margin: 0 2px 10px; overflow: hidden; }
+.ctx-segbar-fill { display: flex; height: 100%; border-radius: 3px; overflow: hidden; min-width: 6px; transition: width 320ms var(--ease-out); }
+.ctx-seg { height: 100%; flex: none; min-width: 2px; }
+.ctx-rows { display: flex; flex-direction: column; gap: 1px; }
+.ctx-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 6px; border-radius: var(--radius-control);
+  font-size: 12.5px;
+  transition: background-color 100ms var(--ease-out);
+}
+.ctx-row:hover { background: var(--hover); }
+.ctx-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ctx-row-label { color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-row-pct { margin-left: auto; color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; flex: none; }
 
 /* ═══════════ 灯箱预览 ═══════════ */
 .preview-backdrop {
