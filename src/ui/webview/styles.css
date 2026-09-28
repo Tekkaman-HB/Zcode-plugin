@@ -254,14 +254,7 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
   font-size: 12px; color: var(--ink-2); animation: fade-up 220ms var(--ease-out);
 }
 .banner-error { background: var(--red-tint); color: var(--red); box-shadow: 0 0 0 1px color-mix(in srgb, var(--red) 24%, transparent); }
-.banner-info { background: var(--accent-tint); color: var(--accent-ink); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
 .banner-sub { font-size: 11.5px; opacity: .8; margin-top: 2px; }
-.banner-retry {
-  margin-top: 6px; height: 24px; padding: 0 10px; border-radius: 999px; border: none; cursor: pointer;
-  background: var(--surface); color: var(--ink); font-size: 11.5px; font-weight: 500; box-shadow: var(--shadow-btn);
-  transition: background-color 100ms var(--ease-out);
-}
-.banner-retry:hover { background: var(--hover); }
 
 /* ═══════════ 登录门 ═══════════ */
 .gate {
@@ -520,7 +513,7 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 }
 
 /* ═══════════ 按钮体系（三变体：primary / secondary / surface，胶囊 + 按压回弹） ═══════════ */
-.permission-btn, .gate-retry, .queued-btn, .banner-retry {
+.permission-btn, .queued-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 27px; padding: 0 13px; border-radius: 999px; border: none; cursor: pointer;
   font-size: 12.5px; font-weight: 500; color: var(--ink);
@@ -717,14 +710,13 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .mode-menu { min-width: 250px; }
 .mcp-menu { min-width: 240px; }
 .at-crumbs { font-family: var(--font-mono); font-size: 11px; }
-.ctx-menu { min-width: 280px; }
 .session-menu-item { display: flex; flex-direction: column; gap: 1px; }
 .slash-name { font-size: 12.5px; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-item.static { cursor: default; }
 .menu-item.static:hover { background: transparent; color: var(--ink-2); transform: none; }
 .menu-group { padding: 4px 8px; font-size: 10.5px; font-weight: 600; color: var(--ink-3); letter-spacing: .03em; text-transform: uppercase; }
 .menu-sep { height: 1px; background: var(--line-soft); margin: 4px 6px; }
-.menu-item, .ctx-menu .menu-item, .session-item, .slash-item, .mode-item, .lv-btn {
+.menu-item, .session-item, .slash-item, .mode-item, .lv-btn {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   border: none; background: transparent; cursor: pointer;
   border-radius: var(--radius-control); padding: 6px 9px;
@@ -736,7 +728,7 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 }
 .menu-item-label { font-weight: 500; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-item-meta { margin-left: auto; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
-.menu-empty, .sessions-empty { padding: 10px 12px; font-size: 12px; color: var(--ink-3); }
+.menu-empty { padding: 10px 12px; font-size: 12px; color: var(--ink-3); }
 .mode-check { margin-left: auto; color: var(--accent); font-size: 12px; flex: none; }
 .mode-icon { color: var(--ink-3); flex: none; }
 .mode-name { font-weight: 500; color: var(--ink); }
@@ -767,7 +759,6 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .ctx-title { padding: 6px 10px 4px; font-size: 10.5px; font-weight: 600; color: var(--ink-3); }
 .ctx-progress { height: 5px; border-radius: 3px; background: var(--inset); margin: 4px 10px 8px; overflow: hidden; }
 .ctx-progress-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 320ms var(--ease-out); }
-.status-usage { font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; padding: 4px 10px; }
 
 /* ═══════════ 灯箱预览 ═══════════ */
 .preview-backdrop {

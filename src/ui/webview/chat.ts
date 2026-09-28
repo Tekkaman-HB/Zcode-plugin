@@ -1,32 +1,25 @@
 /**
- * [INPUT]: 消费 ../../protocol/types、./render、./interaction、./i18n、../../ui/bridge 的契约类型
- * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 事件适配 + 交互）
- * [POS]: webview 的中枢——接收扩展侧桥接消息，驱动渲染层；交互焦点队列在此排队并驱动 ./interaction 的卡片
+ * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单）、./icons、./format
+ * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 应用壳 + 桥接消息入口；EventHost/QueueHost/MenuHost 的宿主实现）
+ * [POS]: webview 的中枢——持有全部共享状态，事件适配/交互队列/菜单渲染委托给子模块；slash/@ 弹层因需改写输入框文本留在本层
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type {
   SessionMessage,
   MessagePart,
   SessionSettings,
-  SessionProjection,
-  SlashCommand,
-  SessionEvent,
   PermissionRequestParams,
-  PermissionResponse,
-  UserInputRequestParams,
-  UserInputResponse,
-  AvailableModel,
-  ToolPart
+  UserInputRequestParams
 } from '../../protocol/types';
 import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef } from '../bridge';
-import { h, renderMessage, esc, relTime, resetToolCollapseState } from './render';
-import { renderPermissionCard, renderUserInputCard, createInteractionDraft, type InteractionDraft } from './interaction';
+import { h, renderMessage, esc, resetToolCollapseState } from './render';
+import type { InteractionDraft } from './interaction';
 import { makeT, type Locale, type Translate } from './i18n';
-
-interface MutableSessionMessage {
-  info: { role: string; messageId?: string; [k: string]: unknown };
-  parts: MessagePart[];
-}
+import { zLogoEl, modeIconEl, atIconEl, gearIconEl, plusIconEl, clockIconEl } from './icons';
+import { formatTokens, fmtContext } from './format';
+import { applySessionEvent, type ChatSessionState, type MutableSessionMessage } from './events';
+import { renderPermissionCards } from './queue';
+import { MenuController } from './menus';
 
 /** 模式 chip 短名（中文对齐桌面端语义） */
 const MODE_CHIP_LABEL: Record<string, string> = {
@@ -42,74 +35,66 @@ const SUGGESTIONS: { zh: string; en: string }[] = [
   { zh: '为这个函数写单元测试', en: 'Write unit tests for this function' }
 ];
 
-/** 模式图标（chip 与菜单共用，随 currentColor 着色） */
-const MODE_ICONS: Record<string, string> = {
-  plan: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="2.5" width="10" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 6h5M5.5 8.5h5M5.5 11h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
-  build: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M5.5 9.5 3 12l-1 2 2-1 2.5-2.5M9 3.5a2.5 2.5 0 0 1 3.5 3.5L8 11.5 5.5 9 11 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  edit: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M9.5 3.5l3 3L6 13H3v-3l6.5-6.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
-  yolo: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8.5 2 4 9h3.5L7 14l4.5-7H8l.5-5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>'
-};
-
 export class ChatApp {
-  private t: Translate;
-  private locale: Locale = 'en-US';
-  private environmentOk = true;
-  private environmentDetail: string | undefined;
-  private account: BootstrapPayload['account'] = null;
-  private serverState = 'stopped';
-  private defaultMode = 'build';
-  private serverDetail: string | undefined;
-  private session: { info: { title?: string; sessionId: string }; settings: SessionSettings; projection: SessionProjection; slashCommands: SlashCommand[] } | null = null;
-  private messages = new Map<string, MutableSessionMessage>();
-  private dirty = new Set<string>();
-  private pendingPermissions = new Map<string, PermissionRequestParams>();
-  private pendingUserInputs = new Map<string, UserInputRequestParams>();
+  // ═══════════ 子模块宿主面（public：./events ./queue ./menus 经 Host 接口访问） ═══════════
+  t: Translate;
+  locale: Locale = 'en-US';
+  environmentOk = true;
+  environmentDetail: string | undefined;
+  account: BootstrapPayload['account'] = null;
+  serverState = 'stopped';
+  defaultMode = 'build';
+  serverDetail: string | undefined;
+  session: ChatSessionState | null = null;
+  messages = new Map<string, MutableSessionMessage>();
+  dirty = new Set<string>();
+  pendingPermissions = new Map<string, PermissionRequestParams>();
+  pendingUserInputs = new Map<string, UserInputRequestParams>();
   /** 交互卡草稿（键 = requestId，两通道共用——CLI 会在两通道复用同一 requestId）：重渲染不丢已答内容与向导进度 */
-  private ixDrafts = new Map<string, InteractionDraft>();
+  ixDrafts = new Map<string, InteractionDraft>();
   /** 当前拥有焦点的交互卡（type:id）——只在队首切换时抢焦点，重渲染不偷 */
-  private ixHeadId: string | null = null;
-  private flushScheduled = false;
-  private vscodeApi: { postMessage(msg: FromWebviewMessage): void } | undefined;
+  ixHeadId: string | null = null;
+  flushScheduled = false;
+  vscodeApi: { postMessage(msg: FromWebviewMessage): void } | undefined;
 
   // DOM 引用
-  private root!: HTMLElement;
-  private banner!: HTMLElement;
-  private messagesEl!: HTMLElement;
-  private composerInput!: HTMLTextAreaElement;
-  private sendBtn!: HTMLButtonElement;
-  private modelBtn!: HTMLButtonElement;
-  private modeBtn!: HTMLButtonElement;
-  private titleEl!: HTMLElement;
-  private overlayEl!: HTMLElement;
-  private popupEl!: HTMLElement;
-  private attachRow!: HTMLElement;
-  private queuedEl!: HTMLElement;
-  private queuedCount = 0;
-  private queuedItems: { id: string; content: string }[] = [];
+  root!: HTMLElement;
+  banner!: HTMLElement;
+  messagesEl!: HTMLElement;
+  composerInput!: HTMLTextAreaElement;
+  sendBtn!: HTMLButtonElement;
+  modelBtn!: HTMLButtonElement;
+  modeBtn!: HTMLButtonElement;
+  titleEl!: HTMLElement;
+  overlayEl!: HTMLElement;
+  attachRow!: HTMLElement;
+  queuedEl!: HTMLElement;
+  queuedCount = 0;
+  queuedItems: { id: string; content: string }[] = [];
   /** 交互焦点队列：权限卡与用户输入卡统一排队，tab 可点切换，一次亮一张 */
-  private interactionOrder: { type: 'permission' | 'input'; id: string }[] = [];
+  interactionOrder: { type: 'permission' | 'input'; id: string }[] = [];
   /** 当前展示的队列位次（tab 点击切换；提交后原地指向下一条） */
-  private ixSelected = 0;
-  private thinkTimer: ReturnType<typeof setInterval> | undefined;
-  private thinkStart = 0;
-  private pasteSeq = 0;
-  private previewRegistry = new Map<string, string>();
-  private pastePending = new Map<string, string>();
-  private previewEl: HTMLElement | null = null;
-  private ctxBreakdown: { source: string; chars: number }[] | null = null;
-  private popupAnchor: HTMLElement | null = null;
-  private historyBtn!: HTMLButtonElement;
-  private gearBtn!: HTMLButtonElement;
-  private ctxRingBtn!: HTMLButtonElement;
-  private slashIndex = -1;
-  private attachments: AttachmentRef[] = [];
-  private atDir = '';
-  private dirEntries: { dir: string; entries: DirEntry[] } | null = null;
-  private sessionsMenuOpen = false;
-  private currentAssistantId: string | null = null;
-  private mcp: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } | null = null;
-  private usage: { range: string; totalTokens: number } | null = null;
-  private mcpServers: { name: string; pid: number; source: string }[] | null = null;
+  ixSelected = 0;
+  thinkTimer: ReturnType<typeof setInterval> | undefined;
+  thinkStart = 0;
+  pasteSeq = 0;
+  previewRegistry = new Map<string, string>();
+  pastePending = new Map<string, string>();
+  previewEl: HTMLElement | null = null;
+  ctxBreakdown: { source: string; chars: number }[] | null = null;
+  historyBtn!: HTMLButtonElement;
+  gearBtn!: HTMLButtonElement;
+  ctxRingBtn!: HTMLButtonElement;
+  slashIndex = -1;
+  attachments: AttachmentRef[] = [];
+  atDir = '';
+  dirEntries: { dir: string; entries: DirEntry[] } | null = null;
+  sessionsMenuOpen = false;
+  currentAssistantId: string | null = null;
+  mcp: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } | null = null;
+  usage: { range: string; totalTokens: number } | null = null;
+  mcpServers: { name: string; pid: number; source: string }[] | null = null;
+  private menus!: MenuController;
 
   constructor() {
     this.t = makeT('en-US');
@@ -118,6 +103,7 @@ export class ChatApp {
   mount(root: HTMLElement): void {
     this.root = root;
     root.innerHTML = '';
+    this.menus = new MenuController(this);
     this.buildShell();
   }
 
@@ -125,7 +111,7 @@ export class ChatApp {
     this.vscodeApi = api;
   }
 
-  private post(msg: FromWebviewMessage): void {
+  post(msg: FromWebviewMessage): void {
     this.vscodeApi?.postMessage(msg);
   }
 
@@ -143,7 +129,6 @@ export class ChatApp {
     this.banner = h('div', { class: 'banner hidden' });
     this.messagesEl = h('div', { class: 'messages', id: 'messages' });
     this.overlayEl = h('div', { class: 'overlay' });
-    this.popupEl = h('div', { class: 'popup hidden' });
 
     // 输入区（对标 Claude Code）：附件 chips 行 → 文本框 → 控制栏
     // 左：+ 附件 / @ 引用 / 模型 / 齿轮(配置收纳)  右：模式 / 发送
@@ -175,7 +160,7 @@ export class ChatApp {
       this.banner,
       this.messagesEl,
       this.overlayEl,
-      this.popupEl,
+      this.menus.popupEl,
       composer
     );
 
@@ -290,7 +275,7 @@ export class ChatApp {
         this.renderOverlay();
         break;
       case 'session-event':
-        this.onSessionEvent(msg.data);
+        applySessionEvent(this, msg.data);
         break;
       case 'state-updated':
         this.applyProjectionPatch(msg.data.patch);
@@ -321,7 +306,7 @@ export class ChatApp {
         break;
       }
       case 'sessions-list':
-        this.renderSessionsMenu(msg.data.sessions);
+        this.menus.renderSessionsMenu(msg.data.sessions);
         break;
       case 'attachments-picked': {
         for (const a of msg.data.attachments) {
@@ -434,312 +419,13 @@ export class ChatApp {
     }
   }
 
-  // ═══════════════ 事件适配（宽容解析） ═══════════════
-  // 信封结构：{type, payload:{...}}；旧路径（无 payload）按根级字段兜底
-
-  private onSessionEvent(ev: SessionEvent): void {
-    const p = ((ev as unknown as { payload?: Record<string, unknown> }).payload ?? ev) as Record<string, unknown>;
-    switch (ev.type) {
-      case 'model.streaming': {
-        const kind = String(p.kind ?? '');
-        const mid = String(p.assistantMessageId ?? ev.messageId ?? this.streamMessageId());
-        const delta = typeof p.delta === 'string' ? p.delta : '';
-        const partId = String(p.partId ?? '');
-        if (kind === 'text_delta' && delta) {
-          this.appendToStreamPart(mid, partId || `text-${mid}`, 'text', delta);
-        } else if (kind === 'reasoning_delta' && delta) {
-          this.appendToStreamPart(mid, partId || `reasoning-${mid}`, 'reasoning', delta);
-        } else if (kind === 'text_start' || kind === 'reasoning_start' || kind === 'start') {
-          this.ensureMessage(mid, 'assistant');
-        }
-        break;
-      }
-      case 'tool.updated': {
-        const kind = String(p.kind ?? '');
-        const toolCallId = String(p.toolCallId ?? '');
-        if (!toolCallId) break;
-        const existing = this.findToolPart(toolCallId);
-        const toolName = String(p.toolName ?? (existing && (existing as unknown as { toolName?: string }).toolName) ?? 'tool');
-        const mid = this.currentAssistantId ?? `tools-${ev.turnId ?? 'current'}`;
-        const msg = this.ensureMessage(mid, 'assistant');
-        let part = msg.parts.find((x) => x.type === 'tool' && (x as { callId?: string }).callId === toolCallId) as ToolPart | undefined;
-        if (!part) {
-          part = {
-            type: 'tool',
-            partId: `tool-${toolCallId}`,
-            callId: toolCallId,
-            messageId: mid,
-            sessionId: '',
-            tool: toolName,
-            state: { status: 'pending', input: p.input }
-          } as unknown as ToolPart;
-          msg.parts.push(part);
-        }
-        const st = part.state as Record<string, unknown>;
-        if (p.input !== undefined) st.input = p.input;
-        if (typeof p.description === 'string') st.title = p.description;
-        switch (kind) {
-          case 'scheduled':
-            st.status = 'pending';
-            // tool.updated 不带 input（probe-diff 实证）：拉权威消息取 Edit/Write 的 old/new_string
-            this.post({ kind: 'refresh-messages' });
-            break;
-          case 'result': {
-            st.status = 'completed';
-            this.post({ kind: 'refresh-messages' });
-            const result = p.result as Record<string, unknown> | undefined;
-            const output = extractToolResultText(result);
-            if (output) st.output = output;
-            if (result && typeof result.title === 'string') st.title = result.title;
-            break;
-          }
-          case 'started': st.status = 'running'; break;
-          case 'progress':
-            st.status = 'running';
-            if (typeof p.stdoutTail === 'string' && p.stdoutTail) st.output = p.stdoutTail;
-            break;
-          case 'error': {
-            st.status = 'error';
-            const err = p.error as Record<string, unknown> | undefined;
-            st.error = String(err?.message ?? err ?? 'tool error');
-            break;
-          }
-          default: break;
-        }
-        this.dirty.add(mid);
-        this.scheduleFlush();
-        break;
-      }
-      case 'session.titleUpdated': {
-        const title = p.title;
-        if (this.session && typeof title === 'string') {
-          this.session.info.title = title;
-          this.titleEl.textContent = title || this.t('appTitle');
-        }
-        break;
-      }
-      case 'session.updated': {
-        // 宽松投影事件：字段可能在根级或嵌套在 projection 里，双读
-        const proj2 = this.session?.projection as unknown as Record<string, unknown> | undefined;
-        if (!proj2) break;
-        const nested = (p.projection ?? null) as Record<string, unknown> | null;
-        let touched2 = false;
-        // 探针实证（probe-ctx）：payload 带 usage{totalTokens,...}、contextWindow（权威 1M）、
-        // contextUsageBreakdown[{source,chars}]——回合中段即到达，是 contextUsed 最早正源
-        const usage2 = p.usage as { totalTokens?: number; inputTokens?: number; outputTokens?: number } | undefined;
-        const total2 = typeof usage2?.totalTokens === 'number' && usage2.totalTokens > 0
-          ? usage2.totalTokens
-          : undefined;
-        if (total2 !== undefined && proj2.contextUsed !== total2) {
-          proj2.contextUsed = total2;
-          proj2.totalTokenCount = total2;
-          touched2 = true;
-        }
-        if (typeof p.contextWindow === 'number' && p.contextWindow > 0 && proj2.contextWindow !== p.contextWindow) {
-          proj2.contextWindow = p.contextWindow;
-          touched2 = true;
-        }
-        if (Array.isArray(p.contextUsageBreakdown)) {
-          this.ctxBreakdown = (p.contextUsageBreakdown as { source?: string; chars?: number }[])
-            .filter((e) => typeof e.source === 'string' && typeof e.chars === 'number')
-            .map((e) => ({ source: e.source!, chars: e.chars! }));
-          touched2 = true;
-        }
-        for (const key of ['contextUsed', 'contextWindow', 'totalTokenCount', 'status', 'turnCount', 'backgroundJobs']) {
-          const v = p[key] ?? (nested ? nested[key] : undefined);
-          if (v !== undefined && v !== null && proj2[key] !== v) {
-            proj2[key] = v;
-            touched2 = true;
-          }
-        }
-        if (touched2) {
-          this.renderContextRing();
-          if (this.isOpenFor(this.ctxRingBtn)) this.toggleContextMenu(true);
-        }
-        break;
-      }
-      case 'turn.completed': {
-        // 回合已结束：状态强制归位（state.updated 偶发缺 status 补丁时的兜底）
-        if (this.session) (this.session.projection as unknown as { status: string }).status = 'idle';
-        // 协议原生校准：turn.completed payload.usage 即本回合请求的 token 账目
-        // contextUsed = input(含 cache 回放) + output —— 与 CLI reducer mfe 同构
-        const usage = p.usage as { inputTokens?: number; outputTokens?: number; totalTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number } | undefined;
-        const proj3 = this.session?.projection as unknown as Record<string, unknown> | undefined;
-        if (usage && proj3) {
-          const num = (v: unknown) => (typeof v === 'number' && v >= 0 ? v : undefined);
-          const input = num(usage.inputTokens)
-            ?? (num(usage.totalTokens) !== undefined && num(usage.outputTokens) !== undefined
-              ? Math.max(0, (usage.totalTokens as number) - (usage.outputTokens as number))
-              : ((num(usage.cacheReadTokens) ?? 0) + (num(usage.cacheWriteTokens) ?? 0) || undefined));
-          const output = num(usage.outputTokens) ?? 0;
-          const used = input !== undefined ? input + output : num(usage.totalTokens);
-          if (used !== undefined) {
-            proj3.contextUsed = used;
-            if (typeof usage.totalTokens === 'number') proj3.totalTokenCount = usage.totalTokens;
-            this.renderContextRing();
-            if (this.isOpenFor(this.ctxRingBtn)) this.toggleContextMenu(true);
-          }
-        }
-        // 回合结束：拉取权威消息列表，校准流式渲染与圆环
-        this.post({ kind: 'refresh-messages' });
-        this.renderStatus();
-        break;
-      }
-      case 'turn.failed': {
-        if (this.session) (this.session.projection as unknown as { status: string }).status = 'idle';
-        const errMsg = (p.errorMessage ?? p.error) as string | undefined;
-        this.showError(`${this.t('turnFailed')}${errMsg ? `: ${errMsg}` : ''}`);
-        // 回合结束：拉取权威消息列表，校准流式渲染与圆环
-        this.post({ kind: 'refresh-messages' });
-        this.renderStatus();
-        break;
-      }
-      case 'message.upserted': {
-        const m = extractMessage(ev, p);
-        if (m) {
-          this.messages.set(m.id, m.msg);
-          this.dirty.add(m.id);
-          this.scheduleFlush();
-        }
-        break;
-      }
-      case 'message.removed': {
-        const id = String(p.messageId ?? ev.messageId ?? '');
-        if (id && this.messages.delete(id)) {
-          this.messagesEl.querySelector(`[data-message-id="${CSS.escape(id)}"]`)?.remove();
-        }
-        break;
-      }
-      case 'part.upserted': {
-        const part = (p.part ?? ev.part) as MessagePart | undefined;
-        if (part?.partId && part.messageId) {
-          this.upsertPart(String(part.messageId), part);
-        }
-        break;
-      }
-      case 'part.delta': {
-        const messageId = String(p.messageId ?? ev.messageId ?? '');
-        const partId = String(p.partId ?? ev.partId ?? '');
-        const delta = String(p.delta ?? '');
-        if (!messageId || !partId || !delta) break;
-        const field = String(p.field ?? 'text');
-        const m = this.ensureMessage(messageId, 'assistant');
-        let part = m.parts.find((x) => x.partId === partId);
-        if (!part) {
-          part = {
-            type: field === 'reasoning' ? 'reasoning' : 'text',
-            partId,
-            messageId,
-            sessionId: '',
-            text: ''
-          } as unknown as MessagePart;
-          m.parts.push(part);
-        }
-        if (field === 'reasoning' || field === 'text') {
-          (part as { text?: string }).text = ((part as { text?: string }).text ?? '') + delta;
-        } else if (field === 'output') {
-          const st = (part as { state?: { output?: string } }).state;
-          if (st) st.output = (st.output ?? '') + delta;
-        }
-        this.dirty.add(messageId);
-        this.scheduleFlush();
-        break;
-      }
-      case 'permission.requested': {
-        // 权限卡片由 interaction/requestPermission 反向请求驱动；事件重复到达时忽略
-        const rid = String(p.requestId ?? ev.requestId ?? '');
-        if (rid && !this.pendingPermissions.has(rid)) {
-          const req = { ...p, requestId: rid } as unknown as PermissionRequestParams;
-          if (req.options && req.toolName) this.pendingPermissions.set(rid, req);
-          this.markDirtyPermissions();
-        }
-        break;
-      }
-      case 'permission.resolved': {
-        const rid = String(p.requestId ?? ev.requestId ?? '');
-        if (rid) {
-          this.pendingPermissions.delete(rid);
-          this.ixDrafts.delete(rid);
-          this.markDirtyPermissions();
-          this.renderStatus();
-        }
-        break;
-      }
-      case 'userInput.resolved': {
-        const rid = String(p.requestId ?? ev.requestId ?? '');
-        if (rid) {
-          this.pendingUserInputs.delete(rid);
-          this.ixDrafts.delete(rid);
-          this.markDirtyPermissions();
-        }
-        break;
-      }
-      default:
-        break; // 其余事件（checkpoint/rewind/streamRecovery 等）暂不渲染
-    }
-  }
-
-  /** 当前流式回合对应的助手消息 id（无则造一个稳定 id） */
-  private streamMessageId(): string {
-    if (!this.currentAssistantId) this.currentAssistantId = `stream-${this.session?.info.sessionId ?? 'local'}-${Date.now()}`;
-    return this.currentAssistantId;
-  }
-
-  /** 流式增量追加：text 进正文部件，reasoning 进思考部件 */
-  private appendToStreamPart(messageId: string, partId: string, kind: 'text' | 'reasoning', delta: string): void {
-    this.currentAssistantId = messageId;
-    const m = this.ensureMessage(messageId, 'assistant');
-    let part = m.parts.find((x) => x.partId === partId) as { text?: string; type?: string } | undefined;
-    if (!part) {
-      const np: Record<string, unknown> = {
-        type: kind === 'reasoning' ? 'reasoning' : 'text',
-        partId,
-        messageId,
-        sessionId: '',
-        text: ''
-      };
-      m.parts.push(np as unknown as MessagePart);
-      part = np as unknown as { text?: string };
-    }
-    part.text = (part.text ?? '') + delta;
-    this.dirty.add(messageId);
-    this.scheduleFlush();
-  }
-
   /** 乐观更新当前模型/档位（patch 回流前 chip 即时反馈） */
-  private optimisticSetModel(providerId: string, modelId: string, reasoningLevel?: string): void {
+  optimisticSetModel(providerId: string, modelId: string, reasoningLevel?: string): void {
     if (!this.session) return;
     const sel = { providerId, modelId, ...(reasoningLevel ? { options: { reasoningLevel } } : {}) };
     this.session.settings.model.current = sel;
     this.session.settings.model.lastUsed = sel;
     this.renderHeaderControls();
-  }
-
-  private ensureMessage(id: string, role: string): MutableSessionMessage {
-    let m = this.messages.get(id);
-    if (!m) {
-      m = { info: { role, messageId: id }, parts: [] };
-      this.messages.set(id, m);
-    }
-    return m;
-  }
-
-  private upsertPart(messageId: string, part: MessagePart): void {
-    const m = this.ensureMessage(messageId, 'assistant');
-    const i = m.parts.findIndex((p) => p.partId === part.partId);
-    if (i >= 0) m.parts[i] = part;
-    else m.parts.push(part);
-    this.dirty.add(messageId);
-    this.scheduleFlush();
-  }
-
-  private findToolPart(callId: string): MessagePart | null {
-    for (const m of this.messages.values()) {
-      for (const p of m.parts) {
-        if (p.type === 'tool' && (p as { callId?: string }).callId === callId) return p;
-      }
-    }
-    return null;
   }
 
   private applyProjectionPatch(patch: Record<string, unknown>): void {
@@ -779,7 +465,7 @@ export class ChatApp {
 
   // ═══════════════ 渲染刷新 ═══════════════
 
-  private scheduleFlush(): void {
+  scheduleFlush(): void {
     if (this.flushScheduled) return;
     this.flushScheduled = true;
     requestAnimationFrame(() => {
@@ -844,134 +530,20 @@ export class ChatApp {
 
   private rebuildMessages(): void {
     this.messagesEl.innerHTML = '';
-    for (const [id, m] of this.messages) {
+    for (const m of this.messages.values()) {
       this.messagesEl.append(renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg)));
-      void id;
     }
-    this.renderPermissionCards();
+    renderPermissionCards(this);
     this.scrollBottom();
     this.renderThinkingState();
   }
 
-  private markDirtyPermissions(): void {
-    this.renderPermissionCards();
-  }
-
-  /**
-   * 交互焦点卡：权限与用户输入统一排队。tab 可点切换查看/作答，提交后原地推进下一条。
-   * tab 标签可区分请求（权限 = 工具名 · 理由摘要；输入 = 首 header），不再千篇一律。
-   */
-  private renderPermissionCards(): void {
-    this.messagesEl.querySelectorAll('.permission-card, .user-input-card').forEach((n) => n.remove());
-
-    // 同步队列与登记表（resolved 的条目移出）+ 兜底去重
-    this.interactionOrder = this.interactionOrder.filter((e) => {
-      if (e.type === 'permission') return this.pendingPermissions.has(e.id);
-      return this.pendingUserInputs.has(e.id);
-    });
-    if (this.interactionOrder.length > 1) {
-      const seen = new Set<string>();
-      this.interactionOrder = this.interactionOrder.filter((e) => {
-        const k = `${e.type}:${e.id}`;
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-    }
-
-    if (!this.interactionOrder.length) {
-      this.ixSelected = 0;
-      this.ixHeadId = null;
-      this.scrollBottom();
-      return;
-    }
-    this.ixSelected = Math.max(0, Math.min(this.ixSelected, this.interactionOrder.length - 1));
-
-    const focus = this.interactionOrder[this.ixSelected];
-    const total = this.interactionOrder.length;
-
-    // tab 标签：输入卡取首 header；权限卡 = 工具名 · 理由摘要（reason 是唯一区分字段）
-    const tabLabel = (e: { type: 'permission' | 'input'; id: string }): string => {
-      const req = e.type === 'permission' ? this.pendingPermissions.get(e.id) : this.pendingUserInputs.get(e.id);
-      if (!req) return '…';
-      const qs = ((req.input ?? {}) as { questions?: { header: string }[] }).questions
-        ?? ((req as unknown as { questions?: { header: string }[] }).questions ?? []);
-      if (qs.length) return qs[0].header + (qs.length > 1 ? ` +${qs.length - 1}` : '');
-      if (e.type === 'permission') {
-        const p = req as PermissionRequestParams;
-        const reason = (p.reason || '').replace(/\s+/g, ' ').trim();
-        const text = p.toolName && reason ? `${p.toolName} · ${reason}` : (p.toolName || this.t('permissionNeeded'));
-        return text.length > 30 ? text.slice(0, 29) + '…' : text;
-      }
-      const prompt = (req as { prompt?: string }).prompt;
-      if (prompt) return prompt.length > 16 ? prompt.slice(0, 16) + '…' : prompt;
-      return this.t('respond');
-    };
-    const tabs = h('div', { class: 'ix-tabs' });
-    this.interactionOrder.forEach((e, i) => {
-      tabs.append(h('button', {
-        type: 'button',
-        class: `ix-tab ${i === this.ixSelected ? 'active' : ''}`,
-        title: tabLabel(e),
-        onclick: () => {
-          if (this.ixSelected !== i) {
-            this.ixSelected = i;
-            this.renderPermissionCards();
-          }
-        }
-      }, `${i + 1}. ${tabLabel(e)}`));
-    });
-    if (total > 1) tabs.append(h('span', { class: 'ix-hint' }, `${this.ixSelected + 1}/${total}`));
-
-    if (focus.type === 'permission') {
-      const req = this.pendingPermissions.get(focus.id)!;
-      let draft = this.ixDrafts.get(req.requestId);
-      if (!draft) { draft = createInteractionDraft(); this.ixDrafts.set(req.requestId, draft); }
-      const card = renderPermissionCard(req, this.t, draft, (response) => {
-        this.pendingPermissions.delete(req.requestId);
-        this.ixDrafts.delete(req.requestId);
-        this.post({ kind: 'permission-response', requestId: req.requestId, response: response as PermissionResponse });
-        this.renderPermissionCards();
-      });
-      card.prepend(tabs);
-      this.messagesEl.append(card);
-      this.focusInteractionCard(card, focus);
-    } else {
-      const req = this.pendingUserInputs.get(focus.id);
-      if (!req) {
-        this.interactionOrder.shift();
-        this.renderPermissionCards();
-        return;
-      }
-      let draft = this.ixDrafts.get(req.requestId);
-      if (!draft) { draft = createInteractionDraft(); this.ixDrafts.set(req.requestId, draft); }
-      const card = renderUserInputCard(req, this.t, draft, (response) => {
-        this.submitUserInput(req.requestId, response as UserInputResponse);
-      });
-      card.prepend(tabs);
-      this.messagesEl.append(card);
-      this.focusInteractionCard(card, focus);
-    }
-    this.scrollBottom();
-  }
-
-  /** 队首切换时把焦点交给卡片（键盘导航立即可用）；同卡重渲染不抢用户焦点 */
-  private focusInteractionCard(card: HTMLElement, focus: { type: string; id: string }): void {
-    const headId = `${focus.type}:${focus.id}`;
-    if (this.ixHeadId === headId) return;
-    this.ixHeadId = headId;
-    card.focus({ preventScroll: true });
-  }
-
-  private submitUserInput(requestId: string, response: UserInputResponse): void {
-    this.pendingUserInputs.delete(requestId);
-    this.ixDrafts.delete(requestId);
-    this.post({ kind: 'user-input-response', requestId, response });
-    this.renderPermissionCards(); // 队列推进到下一张
+  markDirtyPermissions(): void {
+    renderPermissionCards(this);
   }
 
   /** 权威上下文窗口：当前模型在 available（配置权威列表）里的值；投影里的 200K 是降级值不可信 */
-  private authoritativeWindow(): number {
+  authoritativeWindow(): number {
     const cur = this.session?.settings.model.current;
     const fromModel = cur
       ? this.session?.settings.model.available.find((m) => m.ref.providerId === cur.providerId && m.ref.modelId === cur.modelId)?.contextWindow
@@ -981,7 +553,7 @@ export class ChatApp {
   }
 
   /** 上下文圆环：SVG 进度环，颜色随占用率绿→黄→橙红 */
-  private renderContextRing(): void {
+  renderContextRing(): void {
     const proj = this.session?.projection;
     const btn = this.ctxRingBtn;
     const window = this.authoritativeWindow();
@@ -1000,48 +572,10 @@ export class ChatApp {
     btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
 <circle cx="8" cy="8" r="${r}" fill="none" stroke="var(--vscode-panel-border,rgba(128,128,128,.35))" stroke-width="2.4"/>
 <circle cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round"
-  stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${(c * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 8 8)"/>
+    stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${(c * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 8 8)"/>
 </svg>`;
   }
 
-  /** 圆环点击：上下文使用量（窗口尺寸以模型配置为准，非投影降级值） */
-  private toggleContextMenu(refresh = false): void {
-    if (!refresh && this.isOpenFor(this.ctxRingBtn)) {
-      this.hidePopup();
-      return;
-    }
-    if (!refresh) this.hidePopup();
-    const proj = this.session?.projection;
-    if (!proj) return;
-    const window = this.authoritativeWindow();
-    const used = Math.min(proj.contextUsed, window);
-    const pct = window > 0 ? Math.round((used / window) * 1000) / 10 : 0;
-    const list = h('div', { class: 'menu account-menu' });
-    list.append(h('div', { class: 'menu-item static' },
-      h('span', { class: 'ctx-title' }, this.t('context')),
-      h('span', { class: 'menu-item-meta' }, `${formatTokens(used)}/${fmtContext(window)} (${pct}%)`)
-    ));
-    list.append(h('div', { class: 'ctx-progress' }, h('span', { class: 'ctx-progress-fill', style: `width:${Math.min(100, pct)}%` })));
-    // 分来源占比：session.updated 的 contextUsageBreakdown（真实上下文组成，chars）
-    if (this.ctxBreakdown?.length) {
-      const totalChars = this.ctxBreakdown.reduce((a, b) => a + b.chars, 0);
-      if (totalChars > 0) {
-        list.append(h('div', { class: 'menu-sep' }));
-        for (const e of [...this.ctxBreakdown].sort((a, b) => b.chars - a.chars)) {
-          const share = Math.round((e.chars / totalChars) * 1000) / 10;
-          list.append(h('div', { class: 'menu-item static' },
-            h('span', { class: 'menu-item-label' }, h('span', { class: 'mcp-dot ok' }, '●'), h('span', {}, sourceLabel(e.source))),
-            h('span', { class: 'menu-item-meta' }, `${share}% · ${formatTokens(e.chars)}`)
-          ));
-        }
-      }
-    }
-    this.showPopup(this.ctxRingBtn, list);
-  }
-
-
-
-  /** 思考指示器（Claude Code 同款动态效果）：盲文旋转符 + 实时耗时秒数，一眼区分"活着"与"卡死" */
   /** 运行态判定：回合运行/等待权限/后台任务任一为真 */
   private isBusyLike(): boolean {
     const st = this.session?.projection.status;
@@ -1166,7 +700,7 @@ export class ChatApp {
     this.overlayEl.classList.remove('visible');
   }
 
-  private renderStatus(): void {
+  renderStatus(): void {
     this.updateSendAffordance();
     this.renderContextRing();
   }
@@ -1192,7 +726,7 @@ export class ChatApp {
   }
 
 
-  private showError(message: string): void {
+  showError(message: string): void {
     const existing = this.messagesEl.querySelector('.error-toast');
     existing?.remove();
     this.messagesEl.append(h('div', { class: 'error-toast' }, `⚠ ${esc(message)}`));
@@ -1200,97 +734,19 @@ export class ChatApp {
     setTimeout(() => this.messagesEl.querySelector('.error-toast')?.remove(), 8000);
   }
 
-  // ═══════════════ 菜单 ═══════════════
+  // ═══════════════ 弹层委托（./menus 的唯一入口；slash/@ 弹层在本层直接用 showPopup 设施） ═══════════════
 
-  private showPopup(anchor: HTMLElement, content: HTMLElement): void {
-    this.popupAnchor = anchor;
-    this.popupEl.innerHTML = '';
-    this.popupEl.append(content);
-    this.popupEl.classList.remove('hidden');
-    const rect = anchor.getBoundingClientRect();
-    // 渲染后实测弹窗尺寸，左右上下全部钳制在视口内、并贴齐锚点侧
-    const w = this.popupEl.offsetWidth;
-    let left = rect.left;
-    if (left + w > window.innerWidth - 8) left = window.innerWidth - w - 8;
-    this.popupEl.style.left = `${Math.max(8, left)}px`;
-    if (rect.top > window.innerHeight / 2) {
-      // 锚点在下半屏（composer chips）→ 向上弹出
-      this.popupEl.style.top = 'auto';
-      this.popupEl.style.bottom = `${window.innerHeight - rect.top + 6}px`;
-    } else {
-      this.popupEl.style.bottom = 'auto';
-      this.popupEl.style.top = `${Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - this.popupEl.offsetHeight - 8))}px`;
-    }
-  }
-
-  private hidePopup(): void {
-    this.popupEl.classList.add('hidden');
-    this.popupAnchor = null;
-    this.slashIndex = -1;
-    this.sessionsMenuOpen = false;
-    this.atDir = '';
-  }
-  /** 菜单是否正锚定在该按钮上打开 */
-  private isOpenFor(anchor: HTMLElement): boolean {
-    return !this.popupEl.classList.contains('hidden') && this.popupAnchor === anchor;
-  }
-
-  private toggleModelMenu(): void {
-    if (this.isOpenFor(this.modelBtn)) {
-      this.hidePopup();
-      return;
-    }
-    this.hidePopup();
-    const models = this.session?.settings.model.available ?? [];
-    const current = this.session?.settings.model.current;
-    const groups = new Map<string, AvailableModel[]>();
-    for (const m of models) {
-      const key = m.providerLabel ?? '';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(m);
-    }
-    const list = h('div', { class: 'menu' });
-    for (const [group, items] of groups) {
-      list.append(h('div', { class: 'menu-group' }, group));
-      for (const m of items) {
-        const selected = current?.providerId === m.ref.providerId && current?.modelId === m.ref.modelId;
-        const row = h('div', { class: `menu-item ${selected ? 'selected' : ''}` },
-          h('span', { class: 'menu-item-label' },
-            h('span', {}, m.label),
-            h('span', { class: 'menu-item-meta' }, `${fmtContext(m.contextWindow)}`)
-          ),
-          m.reasoning
-            ? h('span', { class: 'reasoning-levels' },
-                ...m.reasoning.levels.map((lv) =>
-                  h('button', {
-                    class: `lv-btn ${selected && current?.options?.reasoningLevel === lv.value ? 'active' : ''}`,
-                    title: `${this.t('reasoning')}: ${lv.label}`,
-                    onclick: () => {
-                      this.optimisticSetModel(m.ref.providerId, m.ref.modelId, lv.value);
-                      this.post({ kind: 'set-model', providerId: m.ref.providerId, modelId: m.ref.modelId, reasoningLevel: lv.value });
-                      this.hidePopup();
-                    }
-                  }, lv.label[0].toUpperCase())
-                )
-              )
-            : null
-        );
-        row.addEventListener('click', (e) => {
-          if ((e.target as HTMLElement).closest('.lv-btn')) return;
-          const lvl = m.reasoning && selected ? current?.options?.reasoningLevel : m.reasoning?.defaultLevel;
-          this.optimisticSetModel(m.ref.providerId, m.ref.modelId, lvl);
-          this.post({ kind: 'set-model', providerId: m.ref.providerId, modelId: m.ref.modelId, reasoningLevel: lvl });
-          this.hidePopup();
-        });
-        list.append(row);
-      }
-    }
-    if (!models.length) {
-      const connecting = this.serverState === 'starting' || this.serverState === 'stopped';
-      list.append(h('div', { class: 'menu-empty' }, connecting ? this.t('starting') : '—'));
-    }
-    this.showPopup(this.modelBtn, list);
-  }
+  private get popupEl(): HTMLElement { return this.menus.popupEl; }
+  private showPopup(anchor: HTMLElement, content: HTMLElement): void { this.menus.showPopup(anchor, content); }
+  private hidePopup(): void { this.menus.hidePopup(); }
+  private toggleModelMenu(): void { this.menus.toggleModelMenu(); }
+  private toggleSettingsMenu(): void { this.menus.toggleSettingsMenu(); }
+  private renderMcpMenu(): void { this.menus.renderMcpMenu(); }
+  private toggleModeMenu(): void { this.menus.toggleModeMenu(); }
+  private toggleSessionsMenu(): void { this.menus.toggleSessionsMenu(); }
+  /** 菜单是否正锚定在该按钮上打开（./events 的圆环刷新也走这里） */
+  isOpenFor(anchor: HTMLElement): boolean { return this.menus.isOpenFor(anchor); }
+  toggleContextMenu(refresh = false): void { this.menus.toggleContextMenu(refresh); }
 
   // ═══════════════ 附件与 @ 引用 ═══════════════
 
@@ -1429,170 +885,6 @@ export class ChatApp {
     input.focus();
   }
 
-  // ═══════════════ 配置收纳（齿轮弹层，对标 Claude Code settings 菜单） ═══════════════
-
-  private toggleSettingsMenu(): void {
-    if (this.isOpenFor(this.gearBtn)) {
-      this.hidePopup();
-      return;
-    }
-    this.hidePopup();
-    const list = h('div', { class: 'menu' });
-    const item = (label: string, onclick: () => void) =>
-      list.append(h('div', { class: 'menu-item', onclick: () => { this.hidePopup(); onclick(); } }, h('span', {}, label)));
-    if (this.serverState === 'failed') {
-      item(this.t('retry'), () => this.post({ kind: 'retry-server' }));
-    }
-    // 30 天用量（usage/stats 由会话建立/回合结束后推送，此处只读最新值）
-    list.append(h('div', { class: 'menu-item static' },
-      h('span', {}, this.t('usage')),
-      h('span', { class: 'menu-item-meta' }, this.usage ? `${this.usage.range} · ${formatTokens(this.usage.totalTokens)} ${this.t('tokens')}` : '…')
-    ));
-    item(this.t('mcpServers'), () => {
-      this.mcpServers = null;
-      this.showPopup(this.gearBtn, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, '…')));
-      this.post({ kind: 'mcp-servers' });
-    });
-    item(this.t('commands'), () => { this.composerInput.value = '/'; this.composerInput.focus(); this.onInput(); });
-    this.showPopup(this.gearBtn, list);
-  }
-
-
-  private renderMcpMenu(): void {
-    // 名称真相源：process/childProcesses（mcp/list 报 workspace 池恒 disconnected，不可用）
-    const list = h('div', { class: 'menu mcp-menu' });
-    const m = this.mcp;
-    const servers = this.mcpServers;
-    if (!servers) {
-      list.append(h('div', { class: 'menu-empty' }, '…'));
-    } else if (!servers.length) {
-      list.append(h('div', { class: 'menu-empty' }, this.t('noResults')));
-    } else {
-      if (m?.done && m.configuredCount) {
-        list.append(h('div', { class: 'menu-group' },
-          `${this.t('mcpReady')} · ${m.connectedCount ?? 0}/${m.configuredCount ?? 0}${(m.failedCount ?? 0) ? ` · ⚠ ${m.failedCount}` : ''}`));
-      }
-      for (const sv of servers) {
-        list.append(h('div', { class: 'menu-item static', title: `${sv.name} · pid ${sv.pid}` },
-          h('span', { class: 'menu-item-label' },
-            h('span', { class: 'mcp-dot ok' }, '●'),
-            h('span', { class: 'mcp-server-name' }, sv.name)
-          ),
-          h('span', { class: 'menu-item-meta' }, this.t('mcpConnected'))
-        ));
-      }
-    }
-    this.showPopup(this.gearBtn, list);
-    if (!servers) this.post({ kind: 'mcp-servers' });
-  }
-
-
-
-  private toggleModeMenu(): void {
-    if (this.isOpenFor(this.modeBtn)) {
-      this.hidePopup();
-      return;
-    }
-    this.hidePopup();
-    const cur = String(this.session?.settings.mode.current ?? this.session?.projection.mode ?? '');
-    const list = h('div', { class: 'menu mode-menu' });
-    list.append(h('div', { class: 'menu-group' }, this.t('modes')));
-    // 菜单永远可开：四模式是静态选项，不依赖会话数据（图标与 chip 共用 MODE_ICONS）
-    // 命名与描述对齐 ZCode 桌面端：计划模式/变更前确认/自动编辑/完全访问
-    const NAMES: Record<string, { zh: string; en: string }> = {
-      plan: { zh: '计划模式', en: 'Plan' },
-      build: { zh: '变更前确认', en: 'Confirm changes' },
-      edit: { zh: '自动编辑', en: 'Auto edit' },
-      yolo: { zh: '完全访问', en: 'Full access' }
-    };
-    const DESCS: Record<string, { zh: string; en: string }> = {
-      plan: { zh: '编辑前先出计划。', en: 'Present a plan before editing.' },
-      build: { zh: '改文件前先问我。', en: 'Ask me before changing files.' },
-      edit: { zh: '自动编辑文件。', en: 'Edit files automatically.' },
-      yolo: { zh: '减少确认次数。', en: 'Fewer confirmations.' }
-    };
-    const zh = this.locale === 'zh-CN';
-    for (const mode of ['plan', 'build', 'edit', 'yolo'] as const) {
-      const icon = h('span', { class: 'mode-icon' });
-      icon.innerHTML = MODE_ICONS[mode] ?? '';
-      const row = h('div', { class: `menu-item mode-item ${cur === mode ? 'selected' : ''}`, onclick: () => { this.post({ kind: 'set-mode', mode }); this.hidePopup(); } },
-        icon,
-        h('div', { class: 'mode-text' },
-          h('div', { class: 'mode-name' }, zh ? NAMES[mode].zh : NAMES[mode].en),
-          h('div', { class: 'mode-desc' }, zh ? DESCS[mode].zh : DESCS[mode].en)
-        ),
-        cur === mode ? h('span', { class: 'mode-check' }, '✓') : null
-      );
-      list.append(row);
-    }
-    // ── Effort 行：当前模型 reasoning 档位 → 圆点（图四同款） ──
-    const curSel = this.session?.settings.model.current ?? this.session?.settings.model.lastUsed;
-    const modelInfo = curSel
-      ? this.session?.settings.model.available.find((m) => m.ref.providerId === curSel.providerId && m.ref.modelId === curSel.modelId)
-      : undefined;
-    const levels = modelInfo?.reasoning?.levels ?? [];
-    if (levels.length) {
-      const current = curSel?.options?.reasoningLevel ?? modelInfo?.reasoning?.defaultLevel ?? levels[levels.length - 1].value;
-      const currentIdx = Math.max(0, levels.findIndex((l) => l.value === current));
-      list.append(h('div', { class: 'menu-sep' }));
-      const dots = h('div', { class: 'effort-dots' },
-        ...levels.map((lv, i) => h('button', {
-          class: `effort-dot ${i <= currentIdx ? 'on' : ''}`,
-          title: lv.label,
-          onclick: () => {
-            if (curSel) {
-              this.optimisticSetModel(curSel.providerId, curSel.modelId, lv.value);
-              this.post({ kind: 'set-model', providerId: curSel.providerId, modelId: curSel.modelId, reasoningLevel: lv.value });
-            }
-            this.hidePopup();
-          }
-        }))
-      );
-      list.append(h('div', { class: 'menu-item static effort-row' },
-        h('span', { class: 'effort-label' }, `${this.t('effort')} (${levels[currentIdx]?.label ?? current})`),
-        dots
-      ));
-    }
-    this.showPopup(this.modeBtn, list);
-  }
-
-
-  /** 历史会话下拉（Claude Code 同款：时钟按钮 → 会话列表 → 点击 resume） */
-  private toggleSessionsMenu(): void {
-    if (this.isOpenFor(this.historyBtn)) {
-      this.hidePopup();
-      return;
-    }
-    this.hidePopup();
-    this.sessionsMenuOpen = true;
-    this.showPopup(this.historyBtn, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, '…')));
-    this.post({ kind: 'list-sessions' });
-  }
-
-  private renderSessionsMenu(sessions: { sessionId: string; title: string; updatedAt: number; mode: string; status: string }[]): void {
-    if (!this.sessionsMenuOpen) return;
-    const list = h('div', { class: 'menu' });
-    const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 20);
-    if (!sorted.length) {
-      list.append(h('div', { class: 'menu-empty' }, this.t('noSessions')));
-    }
-    for (const s of sorted) {
-      list.append(h('div', {
-        class: 'menu-item session-menu-item',
-        onclick: () => {
-          this.post({ kind: 'resume', sessionId: s.sessionId });
-          this.hidePopup();
-        }
-      },
-        h('span', { class: 'session-menu-title' }, s.title || '(untitled)'),
-        h('span', { class: 'menu-item-meta' },
-          `${s.mode} · ${relTime(s.updatedAt, this.t)}${s.status === 'running' ? ' ●' : ''}`)
-      ));
-    }
-    this.popupEl.innerHTML = '';
-    this.popupEl.append(list);
-  }
-
   // ═══════════════ 输入 ═══════════════
 
   private onKeydown(e: KeyboardEvent): void {
@@ -1600,34 +892,14 @@ export class ChatApp {
       this.closePreview();
       return;
     }
-    const popupOpen = !this.popupEl.classList.contains('hidden') && this.popupEl.classList.contains('slash');
-    if (popupOpen) {
-      const items = [...this.popupEl.querySelectorAll('.menu-item')] as HTMLElement[];
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        this.slashIndex = e.key === 'ArrowDown'
-          ? (this.slashIndex + 1) % items.length
-          : (this.slashIndex - 1 + items.length) % items.length;
-        items.forEach((it, i) => it.classList.toggle('hover', i === this.slashIndex));
-        return;
-      }
-      if ((e.key === 'Enter' || e.key === 'Tab') && this.slashIndex >= 0) {
-        e.preventDefault();
-        items[this.slashIndex]?.click();
-        return;
-      }
-      if (e.key === 'Escape') {
-        this.hidePopup();
-        return;
-      }
-    }
+    if (this.menus.handleComposerKeydown(e)) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       this.onSend();
     }
   }
 
-  private onInput(): void {
+  onInput(): void {
     const input = this.composerInput;
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
@@ -1648,7 +920,7 @@ export class ChatApp {
     }
   }
 
-  private showSlashPopup(cmds: SlashCommand[]): void {
+  private showSlashPopup(cmds: { name: string; description: string }[]): void {
     const list = h('div', { class: 'menu' });
     for (const c of cmds.slice(0, 10)) {
       list.append(h('div', {
@@ -1740,120 +1012,10 @@ export class ChatApp {
     return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   }
 
-  private scrollBottom(): void {
+  scrollBottom(): void {
     requestAnimationFrame(() => {
       this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
     });
   }
 }
 
-// ═══════════════ 适配工具 ═══════════════
-
-function extractMessage(ev: SessionEvent, payload?: Record<string, unknown>): { id: string; msg: MutableSessionMessage } | null {
-  const anyEv = ev as unknown as Record<string, unknown>;
-  const source = (payload ?? {}) as Record<string, unknown>;
-  const hasParts = source.parts != null || anyEv.parts != null;
-  const raw = (source.message ?? anyEv.message ?? hasParts ? { ...source } : anyEv) as Record<string, unknown>;
-  const info = (raw.info ?? (raw.role ? { role: raw.role } : null)) as { role?: string; messageId?: string; [k: string]: unknown } | null;
-  const content = raw.content;
-  const parts = (raw.parts ?? (typeof content === 'string' ? [{ type: 'text', text: content }] : null)) as MessagePart[] | null;
-  if (!info && !parts) return null;
-  const id = String(info?.messageId ?? anyEv.messageId ?? source.messageId ?? `ev-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  const normalizedParts = (parts ?? []).map((pp, i) => ({
-    ...pp,
-    partId: (pp as { partId?: string }).partId ?? `${id}-p${i}`,
-    messageId: (pp as { messageId?: string }).messageId ?? id,
-    sessionId: (pp as { sessionId?: string }).sessionId ?? ''
-  }));
-  const role = info?.role ?? 'assistant';
-  return {
-    id,
-    msg: { info: { ...(info ?? {}), role, messageId: id }, parts: normalizedParts }
-  };
-}
-
-/** 工具结果对象 → 展示文本（宽容尝试多种字段） */
-function extractToolResultText(result: Record<string, unknown> | undefined): string | null {
-  if (!result || typeof result !== 'object') return null;
-  for (const k of ['output', 'content', 'summary', 'text', 'display', 'stdout']) {
-    const v = result[k];
-    if (typeof v === 'string' && v) return v;
-  }
-  try {
-    return JSON.stringify(result);
-  } catch {
-    return null;
-  }
-}
-
-/** 官方 Z 标（对齐桌面端 icon 的斜切双段 Z） */
-function zLogoEl(): HTMLElement {
-  const span = document.createElement('span');
-  span.className = 'icon-svg';
-  span.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="5.4" fill="transparent"/><g fill="#fff"><rect x="6.1" y="6.9" width="11.8" height="1.5"/><rect x="6.1" y="15.6" width="11.8" height="1.5"/><polygon points="16.4,8.4 17.8,8.4 7.5,15.6 6.1,15.6"/></g><polygon points="12.4,4.5 13.2,4.5 12,19.5 11.2,19.5" fill="#18181a"/></svg>';
-  return span;
-}
-
-/** 模式图标（chip 与菜单共用，随 currentColor 着色） */
-function modeIconEl(mode: string): HTMLElement {
-  const span = document.createElement('span');
-  span.className = 'icon-svg';
-  span.innerHTML = MODE_ICONS[mode] ?? MODE_ICONS.build;
-  return span;
-}
-
-/** @ 引用图标 */
-function atIconEl(): HTMLElement {
-  const span = document.createElement('span');
-  span.className = 'icon-svg';
-  span.style.fontWeight = '600';
-  span.textContent = '@';
-  span.style.fontSize = '12px';
-  return span;
-}
-
-/** 齿轮图标（配置收纳入口） */
-function gearIconEl(): HTMLElement {
-  const span = document.createElement('span');
-  span.className = 'icon-svg';
-  span.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
-  return span;
-}
-
-/** 新建会话图标（内联 SVG） */
-function plusIconEl(): HTMLElement {
-  const span = document.createElement('span');
-  span.className = 'icon-svg';
-  span.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-  return span;
-}
-
-/** 上下文来源键 → 人话标签 */
-function sourceLabel(src: string): string {
-  const MAP: Record<string, string> = {
-    system_prompt: 'System prompt',
-    meta_user_context: 'User context',
-    skills: 'Skills',
-    tool_prompt: 'Tools',
-    system_tool_schemas: 'Tool schemas',
-    mcp_tool_schemas: 'MCP schemas',
-    messages: 'Messages'
-  };
-  return MAP[src] ?? src;
-}
-
-/** 头部时钟图标（内联 SVG，随 currentColor 主题着色） */
-function clockIconEl(): HTMLElement {
-  const span = document.createElement('span');
-  span.className = 'icon-svg';
-  span.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.6V8l2.3 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-  return span;
-}
-
-function formatTokens(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-}
-
-function fmtContext(n: number): string {
-  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(0)}M` : `${Math.round(n / 1000)}K`;
-}

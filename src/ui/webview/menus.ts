@@ -4,8 +4,8 @@
  * [POS]: webview 的菜单层——popup 类菜单的唯一居所；chat.ts 构建并委托，斜杠/@ 弹层因需改写输入框文本留在 chat.ts（经 public showPopup 共用定位设施）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import type { AvailableModel, SlashCommand } from '../../protocol/types';
-import type { DirEntry, FromWebviewMessage } from '../bridge';
+import type { AvailableModel } from '../../protocol/types';
+import type { FromWebviewMessage } from '../bridge';
 import { h, relTime } from './render';
 import { MODE_ICONS } from './icons';
 import { formatTokens, fmtContext, sourceLabel } from './format';

@@ -6,7 +6,7 @@ TypeScript + VSCode Extension API + esbuild + marked
 src/ - 扩展源码 (4子目录: protocol, ui, ui/webview, 其余为根级模块)
 src/protocol/ - ZCode app-server 协议层：NDJSON JSON-RPC 客户端与全部类型契约
 src/ui/ - 视图宿主：聊天视图的 WebviewViewProvider（会话历史内嵌于聊天头部时钟按钮）
-src/ui/webview/ - webview 前端：渲染层/交互卡/状态机/i18n/markdown
+src/ui/webview/ - webview 前端：应用壳(chat.ts) + 事件适配(events) + 交互队列(queue) + 菜单(menus) + 渲染/交互卡/图标/格式化/i18n/markdown
 scripts/ - 冒烟测试（协议回归，`npm run smoke`）、UI 验收（`npm run ui-preview`：服务+开浏览器，四主题/三栏对比/`?theme=` 深链）与视觉级联回归（`npm run theme-check`：CSS 块序 + computed tokens 四主题互异 + dark+hc 并存 HC 胜出 + 字体子集懒加载 + 深链，无浏览器时降级静态断言；preview-server.mjs 为共享静态服务）
 media/ - 图标资源（zcode.svg=官方 Z 标复刻的侧栏图标；zcode-sessions.svg 备用；fonts/=Inter 可变字重五子集 latin/latin-ext/cyrillic/cyrillic-ext/greek）
 out/ - 构建产物（esbuild 双 target + styles.css + fonts/，git 忽略）
