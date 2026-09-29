@@ -6,6 +6,7 @@
  */
 import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AttachmentRef, DirEntry, FromWebviewMessage, ToWebviewMessage } from './bridge';
@@ -254,8 +255,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private html(webview: vscode.Webview, extRoot: vscode.Uri): string {
     const nonce = Math.random().toString(36).slice(2);
-    const script = webview.asWebviewUri(vscode.Uri.joinPath(extRoot, 'out', 'webview', 'main.js'));
-    const styles = webview.asWebviewUri(vscode.Uri.joinPath(extRoot, 'out', 'webview', 'styles.css'));
+    // 资源 URI 带构建指纹（styles.css mtime）：webview 的磁盘缓存按 URL 命中，URI 不变则
+    // 新 CSS 永远到不了页面（0.5.x 实际事故：上下文弹层新样式全部隐形）——每次构建必失效
+    const ver = String(fsSync.statSync(path.join(extRoot.fsPath, 'out', 'webview', 'styles.css')).mtimeMs);
+    const asset = (p: string) => `${webview.asWebviewUri(vscode.Uri.joinPath(extRoot, p))}?v=${ver}`;
+    const script = asset('out/webview/main.js');
+    const styles = asset('out/webview/styles.css');
     return /* html */ `<!DOCTYPE html>
 <html lang="${this.locale}">
 <head>

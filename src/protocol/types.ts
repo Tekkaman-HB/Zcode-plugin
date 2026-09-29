@@ -405,33 +405,6 @@ export interface AccountSnapshot {
   states: Record<string, AccountProviderState>;
 }
 
-// ═══════════════ 使用量 ═══════════════
-
-export type UsageRange = 'all' | '7d' | '30d';
-
-/** usage/stats 结果（仅标注 UI 消费的字段，其余容忍） */
-export interface UsageStatsResult {
-  range: UsageRange;
-  totals: {
-    totalTokens: number;
-    inputTokens: number;
-    outputTokens: number;
-    reasoningTokens: number;
-    cacheCreationTokens: number;
-    cacheReadTokens: number;
-    modelRequestCount: number;
-    modelErrorCount: number;
-  };
-  turnTotals?: {
-    totalSessions: number;
-    totalTurns: number;
-    avgTurnDurationMs: number | null;
-    longestSessionMs: number;
-  };
-  models?: { ref?: ModelSelection; label?: string; totalTokens?: number }[];
-  [k: string]: unknown;
-}
-
 // ═══════════════ MCP 遥测（process/mcpTelemetry 通知） ═══════════════
 
 export interface McpTelemetryEvent {

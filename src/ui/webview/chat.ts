@@ -92,7 +92,6 @@ export class ChatApp {
   sessionsMenuOpen = false;
   currentAssistantId: string | null = null;
   mcp: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } | null = null;
-  usage: { range: string; totalTokens: number } | null = null;
   mcpServers: { name: string; pid: number; source: string }[] | null = null;
   private menus!: MenuController;
 
@@ -265,7 +264,6 @@ export class ChatApp {
         this.ixDrafts.clear();
         this.ixHeadId = null;
         this.mcp = null;
-        this.usage = null;
         this.ctxBreakdown = null;
         this.queuedCount = 0;
         this.queuedItems = [];
@@ -323,11 +321,6 @@ export class ChatApp {
         break;
       case 'mcp-progress': {
         this.mcp = msg.data;
-        this.renderStatus();
-        break;
-      }
-      case 'usage': {
-        this.usage = msg.data;
         this.renderStatus();
         break;
       }

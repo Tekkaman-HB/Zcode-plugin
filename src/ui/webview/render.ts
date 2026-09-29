@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./i18n
- * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion() 工具与 renderMessage/renderPart 等部件渲染器（含 AskUserQuestion 问答摘要卡）
+ * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite() 工具与 renderMessage/renderPart 等部件渲染器（含 AskUserQuestion 问答摘要卡与 TodoWrite 任务清单卡）
  * [POS]: webview 的渲染层——纯函数式 DOM 构建，chat.ts 持有状态并调用；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -77,6 +77,13 @@ export function isAskUserQuestion(toolName: string, input: unknown): boolean {
   return token.includes('askuserquestion');
 }
 
+/** TodoWrite 工具判定：todos 载荷或工具名（todo_write 变体），任务清单卡分流 */
+export function isTodoWrite(toolName: string, input: unknown): boolean {
+  if (input && typeof input === 'object' && Array.isArray((input as { todos?: unknown }).todos)) return true;
+  const token = toolName.trim().toLowerCase().replace(/[\s_]+/g, '');
+  return token.includes('todowrite') || token.includes('todoplan');
+}
+
 // ═══════════════ 工具卡片 ═══════════════
 
 const TOOL_STATUS_ICON: Record<string, string> = {
@@ -120,8 +127,24 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
   const input = st?.input as Record<string, unknown> | undefined;
   // AskUserQuestion：问题→答案 摘要（对标桌面端 ask-question 渲染器），替代裸 JSON
   const isAskQ = isAskUserQuestion(part.tool, input);
-  const isWrite = !isAskQ && /write/i.test(part.tool) && input && typeof input.content === 'string' && !input.new_string;
-  if (isAskQ) {
+  const isTodo = !isAskQ && isTodoWrite(part.tool, input);
+  const isWrite = !isAskQ && !isTodo && /write/i.test(part.tool) && input && typeof input.content === 'string' && !input.new_string;
+  if (isTodo) {
+    // TodoWrite → 任务清单卡（对标桌面端 todo 渲染）：状态点 + 文案，summary = 完成数/总数
+    const todos = (input?.todos ?? []) as { content?: string; status?: string }[];
+    const done = todos.filter((x) => x.status === 'completed').length;
+    setSummary(`${done}/${todos.length}`);
+    if (todos.length) {
+      const list = h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, t('todoList')));
+      for (const td of todos) {
+        const st = td.status === 'completed' ? 'completed' : td.status === 'in_progress' ? 'running' : 'pending';
+        list.append(h('div', { class: `todo-item todo-${st}` },
+          h('span', { class: `todo-dot todo-dot-${st}` }, st === 'completed' ? '✓' : ''),
+          h('span', { class: 'todo-text' }, td.content ?? '')));
+      }
+      body.append(list);
+    }
+  } else if (isAskQ) {
     const qs = (input?.questions ?? []) as { question: string; header?: string }[];
     const answers = (input?.answers ?? {}) as Record<string, string | string[]>;
     if (qs[0]?.header) setSummary(qs[0].header);
@@ -154,7 +177,7 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
       body.append(h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, t('toolInput')), jsonBlock(st.input)));
     }
   }
-  if (!isAskQ && status === 'completed' && st?.output) {
+  if (!isAskQ && !isTodo && status === 'completed' && st?.output) {
     body.append(h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, t('toolOutput')), jsonBlock(st.output)));
   }
   if (status === 'error' && st?.error) {

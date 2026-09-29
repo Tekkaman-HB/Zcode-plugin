@@ -1,5 +1,7 @@
 # Zcode-plugin - ZCode 的 VSCode 插件（仅 macOS）：复用桌面端账户认证，对接 CLI app-server 协议
 
+> AI 工作规范与文档库入口见 AGENTS.md；本文件是 GEB 代码地图 L1（项目宪法）。
+
 TypeScript + VSCode Extension API + esbuild + marked
 
 <directory>
@@ -10,6 +12,8 @@ src/ui/webview/ - webview 前端：应用壳(chat.ts) + 事件适配(events) + �
 scripts/ - 冒烟测试（协议回归，`npm run smoke`）、UI 验收（`npm run ui-preview`：服务+开浏览器，四主题/三栏对比/`?theme=` 深链）与视觉级联回归（`npm run theme-check`：CSS 块序 + computed tokens 四主题互异 + dark+hc 并存 HC 胜出 + 字体子集懒加载 + 深链，无浏览器时降级静态断言；preview-server.mjs 为共享静态服务）
 media/ - 图标资源（zcode.svg=官方 Z 标复刻的侧栏图标；zcode-sessions.svg 备用；fonts/=Inter 可变字重五子集 latin/latin-ext/cyrillic/cyrillic-ext/greek）
 out/ - 构建产物（esbuild 双 target + styles.css + fonts/，git 忽略）
+docs/ - 项目知识库（AI 友好 Docs 标准：00-context~99-archive 十一目录；AI 工作规范入口见 AGENTS.md，与 GEB 代码地图并存——docs:check/ai:check 守护）
+scripts/docs/ - 文档校验闸门脚本（check.sh 结构校验 / ai-check.sh AI 行为合同 / new-adr.sh ADR 建号）
 </directory>
 <config>
 package.json - 插件清单：secondarySidebar 容器×1、命令、设置、市场图标（media/icon.png=官方 128px）
@@ -34,11 +38,12 @@ LICENSE - MIT
 - model.streaming 的 payload.kind：text_delta / reasoning_delta / tool_input_*（增量渲染管线）；tool.updated 的 payload.kind：scheduled/started/progress/result/error
 - **tool.updated 不带 input（probe-diff 实证）**：scheduled/started/result 的 payload 均无 input 字段——Edit/Write 的 old_string/new_string/content 只存在于 session/read 拉回的消息部件（部件无 partId、callId 写作 callID，需归一化）。因此工具 scheduled/result 时触发 refresh-messages（400ms 节流）取真实 input 渲染 diff；Write 无 old → content 全绿显示为 new file
 - **MCP 名称真相源是 `process/childProcesses`**（返回 {pid, serverName, mcpSource, pluginName}；遥测 mcpId 的 custom 段是每进程 HMAC 盐哈希无法反查名称）。`mcp/list` 只反映 workspace 池——对会话池恒报 disconnected，禁用其做 UI 状态；协议不暴露 MCP 工具名
-- **用量统计**：`usage/stats {range:"all"|"7d"|"30d"}` → totals.totalTokens 等；会话建立与回合结束后刷新（2s 去抖），展示于齿轮配置菜单（range · tokens）。原 `session/usage` 会话级明细管线已移除——webview 端 case 曾静默丢弃其输出（死管线，YAGNI，0.5.x 清理）
+- **用量统计已整体移除（0.5.x 用户裁决）**：齿轮菜单不展示用量行，`usage/stats` 拉取管线（fetchUsage/scheduleUsageRefresh/桥接 usage 消息/UsageRange·UsageStatsResult 类型）全链删除——勿因"桌面端有"而回加；如未来需要，重走 usage/stats + 独立 UI 载体
 - **model patch 陷阱**：`state.updated` 的 `patch.model.available` 只含当前选中模型、contextWindow 是降级值（200K）——settings.model.available 必须以 create/resume 响应（配置权威：完整列表+真实窗口如 1M）为准，patch 只取 current/lastUsed，新增模型按 ref 去重追加
 - **stderr 是噪声**：CLI 会向 stderr 写 dotenvx 提示/Built-in 刷新日志等诊断——严禁参与 UI 状态机（曾导致启动横幅常驻 + 会话被误清）；服务状态只由进程生命周期（spawn/exit）与推送结果驱动
 - **session.updated 投影通道**：负载是宽松对象（内部投影事件 fallback），contextUsed/contextWindow/totalTokenCount/status 从这里到 UI——state.updated 不带用量
-- **contextUsed 正源（probe-ctx 实证）**：`session.updated` 事件 payload 带 `usage{totalTokens}`（回合中段即达，最早）+ `contextWindow`（服务端权威值如 1M）+ `contextUsageBreakdown[{source,chars}]`（真实上下文组成）；`turn.completed` payload.usage 与 `session/read` 投影、`step-finish` part 的 tokens.total 同值（60168 实测）——四路冗余。一忌：事件 payload 里没有 contextUsed 键——别等它。权威解析见 src/ui/webview/chat.ts:authoritativeWindow
+- **webview 资源缓存契约（0.5.x 实际事故：新 CSS 全部隐形）**：VSCode webview 磁盘缓存按资源 URL 命中——`out/webview/styles.css` 的 vscode-webview URI 不变，重装插件后新 CSS 永远到不了页面（症状：新 JS 逻辑生效、新样式全丢，二者"半新半旧"最难排查）。chatProvider 的 html() 给 script/styles URI 追加 `?v=<styles.css mtime>` 构建指纹，每次构建必失效；fonts 由 CSS 内相对路径引用随之失效。排障时先核对页面实际加载的 CSS（document.styleSheets 里找目标规则），勿在 DOM 逻辑层空转
+- **contextUsed 正源（probe-ctx 实证）**：`session.updated` 事件 payload 带 `usage{totalTokens}`（回合中段即达，最早）+ `contextWindow`（服务端权威值如 1M）+ `contextUsageBreakdown[{source,chars}]`（真实上下文组成）；`turn.completed` payload.usage 与 `session/read` 投影、`step-finish` part 的 tokens.total 同值（60168 实测）——四路冗余。一忌：事件 payload 里没有 contextUsed 键——别等它。权威解析见 src/ui/webview/chat.ts:authoritativeWindow。**breakdown 时序洞**：它只在回合进行中的 session.updated 携带且字段可选——resume 旧会话/两回合之间打开上下文弹层必然为空（0.5.x 实际事故：弹层只剩标题+空条）；UI 以占位行兜底（"明细将在回合进行中自动呈现"），数据到达时 events 层 isOpenFor→toggleContextMenu(true) 自动补刷；`session/usage` 的 inputBaselineBySource 仍是按轮次 token 分桶，不可充当明细兜底
 - **附件 wire 契约（probe-attach 终验）**：`zcodePromptAttachmentSchema` = `{kind:'image'|'video'|'pdf'|'file', filename, mimeType, localPath?, dataBase64?, textContent?}`——**判别键是 kind 不是 type**；**图片必须落盘走 localPath**（dataBase64 只留占位符不送达模型，probe 实证）；textContent 文本内联可用；localPath 会出现在占位符里供模型 Read。粘贴图：webview dataUrl → 宿主写 tmp 文件 → localPath；选文件：直接传原路径（不过桥 base64）。**此前 mediaType/dataUrl 形状是错误结论，勿回退**
 - 事件流：`session/event` 通知 + `state.updated` 投影
 - **排队/插队**：app-server 的 `session/send` 在回合运行中必拒（-32010 active prompt exists）；**sendNow 捕获 -32010 自动转排队**（busy 标志与服务器失步时的自愈——事件错过致 busy=false 但回合实际在跑，报错改入队+busy 重新置 true）；steerTurn 是 runtime 内部方法不在协议面——运行中补充输入由宿主侧排队、turn.completed/failed 后自动出队（对标桌面端 queue auto-drain）；contextUsed 仅在 ModelComplete/TurnComplete 内部事件时更新（流式期间不动是协议行为）

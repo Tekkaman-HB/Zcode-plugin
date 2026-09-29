@@ -9,8 +9,6 @@ import type {
   SessionListResult,
   SessionSubscribeResult,
   SessionMessage,
-  UsageRange,
-  UsageStatsResult,
   McpTelemetryEvent,
   PermissionRequestParams,
   UserInputRequestParams,
@@ -41,7 +39,6 @@ export class SessionController {
   private mcpStarted = 0;
   private mcpServerIds: string[] = [];
   private mcpCrashed: string[] = [];
-  private usageRefreshTimer: NodeJS.Timeout | undefined;
   private lastActivityAt = Date.now();
   /** 运行中收到的补充输入：回合结束自动依次出队（对标桌面端 queue auto-drain） */
   private pendingQueue: { id: string; content: string; attachments?: { name: string; path?: string; mime?: string; size?: number; dataUrl?: string }[] }[] = [];
@@ -98,7 +95,6 @@ export class SessionController {
           this.busy = false;
           this.scheduleQueueDrain();
         }
-        if (ev.type === 'turn.completed') this.scheduleUsageRefresh();
         this.cbs.toWebview({ kind: 'session-event', data: ev });
       }
       return;
@@ -230,38 +226,7 @@ export class SessionController {
     this.pendingQueue = [];
     this.cbs.toWebview({ kind: 'session-snapshot', data: this.snapshotPayload(result) });
     await this.subscribe(result.session.sessionId);
-    void this.fetchUsage();
     return result;
-  }
-
-  /** 拉取用量统计并推给 UI（展示于齿轮配置菜单） */
-  async fetchUsage(range: UsageRange = '30d'): Promise<void> {
-    try {
-      const stats = await this.server.request<UsageStatsResult>('usage/stats', { range }, 15_000);
-      const totals = stats.totals;
-      this.cbs.toWebview({
-        kind: 'usage',
-        data: {
-          range,
-          totalTokens: totals?.totalTokens ?? 0,
-          inputTokens: totals?.inputTokens ?? 0,
-          outputTokens: totals?.outputTokens ?? 0,
-          modelCount: Array.isArray(stats.models) ? stats.models.length : 0
-        }
-      });
-    } catch {
-      /* 用量拉取失败静默 */
-    }
-  }
-
-  /** 回合结束后合并刷新用量（去抖 2s） */
-  private scheduleUsageRefresh(): void {
-    if (this.usageRefreshTimer) clearTimeout(this.usageRefreshTimer);
-    this.usageRefreshTimer = setTimeout(() => {
-      this.usageRefreshTimer = undefined;
-      void this.fetchUsage();
-    }, 2000);
-    this.usageRefreshTimer.unref?.();
   }
 
   /** MCP 在跑进程清单（名称真相源：mcp/list 只报 workspace 池不可用） */
@@ -303,7 +268,6 @@ export class SessionController {
     await this.subscribe(sessionId);
     // resume 快照的 projection 不含用量：拉权威消息（step-finish tokens）校准圆环
     await this.refreshMessages();
-    void this.fetchUsage();
   }
 
   async send(content: string, attachments?: { name: string; path?: string; mime?: string; size?: number; dataUrl?: string }[]): Promise<void> {

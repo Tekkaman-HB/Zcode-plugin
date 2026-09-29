@@ -98,7 +98,10 @@
     "smoke": "node esbuild.js && node out/scripts/smoke.js",
     "ui-preview": "node scripts/ui-preview.mjs",
     "theme-check": "node scripts/theme-check.mjs",
-    "package": "npm run build && vsce package --allow-missing-repository"
+    "package": "npm run build && vsce package --allow-missing-repository",
+    "docs:check": "bash scripts/docs/check.sh",
+    "ai:check": "bash scripts/docs/ai-check.sh",
+    "docs:new-adr": "bash scripts/docs/new-adr.sh"
   },
   "dependencies": {
     "marked": "^15.0.0"

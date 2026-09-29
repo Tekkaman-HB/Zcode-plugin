@@ -87,7 +87,6 @@ export type ToWebviewMessage =
   | { kind: 'sessions-list'; data: SessionsListPayload }
   | { kind: 'messages'; data: { messages: SessionMessage[] } }
   | { kind: 'mcp-progress'; data: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } }
-  | { kind: 'usage'; data: { range: string; totalTokens: number; inputTokens: number; outputTokens: number; modelCount: number } }
   | { kind: 'queued-update'; data: { queued: number; items?: { id: string; content: string }[] } }
   | { kind: 'optimistic-user'; data: OptimisticUser }
   | { kind: 'mcp-servers'; data: { running: boolean; servers: { name: string; pid: number; source: string }[] } }

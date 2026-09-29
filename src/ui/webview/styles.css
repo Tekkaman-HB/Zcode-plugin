@@ -425,6 +425,20 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 
 /* AskUserQuestion 问答摘要卡 */
 .qa-item { padding: 2px 0 2px 10px; border-left: 2px solid var(--line); margin: 5px 0; }
+
+/* TodoWrite 任务清单卡（对标桌面端 todo 渲染）：状态点三态 + 文案层次 */
+.todo-item { display: flex; align-items: center; gap: 9px; padding: 3px 0; font-size: 12.5px; min-width: 0; }
+.todo-dot {
+  width: 15px; height: 15px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9.5px; font-weight: 700; line-height: 1;
+  transition: background-color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
+}
+.todo-dot-completed { background: var(--green); color: #fff; }
+.todo-dot-running { border: 1.5px solid var(--accent); color: transparent; animation: records-pulse 1.4s var(--ease-in-out) infinite; }
+.todo-dot-pending { border: 1.5px solid var(--line-strong); color: transparent; }
+.todo-text { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+.todo-completed .todo-text { color: var(--ink-3); }
 .qa-q { font-weight: 600; font-size: 12.5px; }
 .qa-a { color: var(--ink-2); font-size: 12px; margin-top: 1px; }
 
@@ -754,14 +768,23 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .session-item-running { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: records-pulse 1.4s var(--ease-in-out) infinite; }
 
 /* MCP / 账户菜单 */
-.mcp-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex: none; }
+/* MCP 状态灯：连接=绿灯 / 失败=红灯（淡色外环，Beautiful UI 状态点风格） */
+.mcp-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.mcp-dot.ok {
+  background: var(--green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 22%, transparent);
+}
+.mcp-dot.bad {
+  background: var(--red);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 22%, transparent);
+}
 .mcp-server-name { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 上下文弹层（对标桌面端"上下文容量"：标题行 + 分段色条 + 彩点来源行） */
 .ctx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; }
 .ctx-head .ctx-title { padding: 0; font-size: 13px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
 .ctx-head-meta { font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; }
 .ctx-segbar { height: 6px; border-radius: 3px; background: var(--inset); margin: 0 2px 10px; overflow: hidden; }
-.ctx-segbar-fill { display: flex; height: 100%; border-radius: 3px; overflow: hidden; min-width: 6px; transition: width 320ms var(--ease-out); }
+.ctx-segbar-fill { display: flex; height: 100%; border-radius: 3px; overflow: hidden; min-width: 6px; background: var(--accent); transition: width 320ms var(--ease-out); }
 .ctx-seg { height: 100%; flex: none; min-width: 2px; }
 .ctx-rows { display: flex; flex-direction: column; gap: 1px; }
 .ctx-row {
@@ -774,6 +797,9 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .ctx-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .ctx-row-label { color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-row-pct { margin-left: auto; color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; flex: none; }
+/* 占位行（breakdown 未达）：虚线空心点 + 弱化文字 */
+.ctx-row-placeholder .ctx-row-label { color: var(--ink-3); font-style: italic; }
+.ctx-dot-placeholder { border: 1.5px dashed var(--line-strong); }
 
 /* ═══════════ 灯箱预览 ═══════════ */
 .preview-backdrop {

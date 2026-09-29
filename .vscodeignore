@@ -13,3 +13,14 @@ zcode-smoke-marker.txt
 media/fonts/**
 .gitignore
 *.png
+.codegraph/**
+AGENTS.md
+CONTEXT.md
+DESIGN.md
+NOTICE.md
+THIRD-PARTY-NOTICES.md
+docs/**
+.claude/**
+GEMINI.md
+.env.example
+.env*

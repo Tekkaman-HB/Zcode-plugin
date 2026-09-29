@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ZCode 真实产物驱动页（协议桥注入）</title>
+<link rel="stylesheet" href="/out/webview/styles.css">
+<style>html,body{height:100%;margin:0}</style>
+</head>
+<body>
+<div id="harness" style="position:fixed;top:8px;right:8px;z-index:999;display:flex;gap:4px;font:500 11px/1 Inter,sans-serif">
+  <button id="fire-ctx">注入 session.updated(breakdown)</button>
+  <button id="open-ctx">点开上下文弹层</button>
+</div>
+<style>#harness button{height:22px;padding:0 9px;border-radius:999px;border:1px solid #888;background:#fff;color:#333;cursor:pointer}</style>
+<div id="app"></div>
+<script>
+  // VSCode webview API 桩：记录 webview→宿主 消息
+  window.__sent = [];
+  window.acquireVsCodeApi = function () {
+    return {
+      postMessage: function (m) { window.__sent.push(m); },
+      getState: function () { return null; },
+      setState: function () {}
+    };
+  };
+</script>
+<script src="/out/webview/main.js"></script>
+<script>
+(function () {
+  var post = function (m) { window.postMessage(m, '*'); };
+  var now = Date.now();
+
+  post({ kind: 'bootstrap', data: {
+    locale: 'zh-CN', workspacePath: '/Users/demo/project', environmentOk: true,
+    account: { loggedIn: true, user: { email: 'demo@z.ai' }, providerIds: ['p'], providerLabels: { p: 'Z.AI' } },
+    serverState: 'running', defaultMode: 'build'
+  }});
+
+  post({ kind: 'session-snapshot', data: {
+    session: { sessionId: 's1', createdAt: now, updatedAt: now, mode: 'build', status: 'running', title: '上下文弹层排障', sessionKind: 'session', workspace: { workspacePath: '/Users/demo/project' } },
+    settings: {
+      mode: { current: 'build' },
+      model: { available: [{ ref: { providerId: 'p', modelId: 'glm-5.3' }, label: 'GLM-5.3', providerLabel: 'Z.AI', contextWindow: 1000000, maxOutputTokens: 128000 }], current: { providerId: 'p', modelId: 'glm-5.3' } },
+      permission: { mode: 'build' }
+    },
+    projection: { sessionId: 's1', status: 'running', mode: 'build', turnCount: 1, totalTokenCount: 0, contextUsed: 0, contextWindow: 1000000, pendingPermissions: [], activeToolCalls: [] },
+    slashCommands: [], messages: []
+  }});
+
+  // 协议信封：session/event {type, payload}——contextUsageBreakdown 在 payload（probe-ctx 实证）
+  document.getElementById('fire-ctx').addEventListener('click', function () {
+    post({ kind: 'session-event', data: { type: 'session.updated', sessionId: 's1', payload: {
+      usage: { totalTokens: 434000 },
+      contextWindow: 1000000,
+      contextUsageBreakdown: [
+        { source: 'messages', chars: 348000 },
+        { source: 'mcp_tool_schemas', chars: 48000 },
+        { source: 'system_tool_schemas', chars: 27000 },
+        { source: 'skills', chars: 8000 },
+        { source: 'system_prompt', chars: 2000 },
+        { source: 'meta_user_context', chars: 1000 }
+      ]
+    }}});
+  });
+
+  document.getElementById('open-ctx').addEventListener('click', function () {
+    var ring = document.querySelector('.ctx-ring-btn');
+    if (ring) ring.click();
+  });
+})();
+</script>
+</body>
+</html>

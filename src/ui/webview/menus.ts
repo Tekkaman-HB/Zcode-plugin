@@ -20,7 +20,6 @@ export interface MenuHost {
   serverState: string;
   mcp: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } | null;
   mcpServers: { name: string; pid: number; source: string }[] | null;
-  usage: { range: string; totalTokens: number } | null;
   ctxBreakdown: { source: string; chars: number }[] | null;
   modelBtn: HTMLButtonElement;
   gearBtn: HTMLButtonElement;
@@ -210,7 +209,8 @@ export class MenuController {
       h('span', { class: 'ctx-head-meta' }, headMeta)
     ));
 
-    // 分段色条：填充 = 窗口占比；段 = 各来源在已用中的份额（与下方彩点同色）
+    // 分段色条：填充 = 窗口占比；段 = 各来源在已用中的份额（与下方彩点同色）。
+    // fill 自带 accent 底色兜底——breakdown 未达（resume/两回合间）时也不出现"空轨道"
     const bar = h('div', { class: 'ctx-segbar' });
     const fill = h('div', { class: 'ctx-segbar-fill', style: `width:${Math.min(100, pct)}%` });
     const breakdown = [...(host.ctxBreakdown ?? [])].sort((a, b) => b.chars - a.chars);
@@ -219,21 +219,27 @@ export class MenuController {
       for (const e of breakdown) {
         fill.append(h('span', { class: 'ctx-seg', style: `width:${((e.chars / totalChars) * 100).toFixed(2)}%;background:${sourceColor(e.source)}` }));
       }
-    } else {
-      fill.append(h('span', { class: 'ctx-seg', style: 'flex:1;background:var(--accent)' }));
     }
     bar.append(fill);
     list.append(bar);
 
-    // 来源行：彩点 + 标签 | 百分比右对齐（chars 收进 hover 提示）
+    // 来源行：彩点 + 标签 | 百分比右对齐（chars 收进 hover 提示）。
+    // breakdown 仅随回合中段的 session.updated 携带（resume/两回合间为空）→ 占位说明，数据到达时
+    // events 层 isOpenFor→toggleContextMenu(true) 会自动补刷
     const rows = h('div', { class: 'ctx-rows' });
-    for (const e of breakdown) {
-      const share = totalChars > 0 ? Math.round((e.chars / totalChars) * 1000) / 10 : 0;
-      rows.append(h('div', { class: 'ctx-row', title: `${sourceLabel(e.source, host.locale)} · ${formatTokens(e.chars)} chars` },
-        h('span', { class: 'ctx-dot', style: `background:${sourceColor(e.source)}` }),
-        h('span', { class: 'ctx-row-label' }, sourceLabel(e.source, host.locale)),
-        h('span', { class: 'ctx-row-pct' }, `${share}%`)
-      ));
+    if (totalChars > 0) {
+      for (const e of breakdown) {
+        const share = Math.round((e.chars / totalChars) * 1000) / 10;
+        rows.append(h('div', { class: 'ctx-row', title: `${sourceLabel(e.source, host.locale)} · ${formatTokens(e.chars)} chars` },
+          h('span', { class: 'ctx-dot', style: `background:${sourceColor(e.source)}` }),
+          h('span', { class: 'ctx-row-label' }, sourceLabel(e.source, host.locale)),
+          h('span', { class: 'ctx-row-pct' }, `${share}%`)
+        ));
+      }
+    } else {
+      rows.append(h('div', { class: 'ctx-row ctx-row-placeholder' },
+        h('span', { class: 'ctx-dot ctx-dot-placeholder' }),
+        h('span', { class: 'ctx-row-label' }, host.t('ctxBreakdownPending'))));
     }
     list.append(rows);
     this.showPopup(host.ctxRingBtn, list);
@@ -254,11 +260,6 @@ export class MenuController {
     if (host.serverState === 'failed') {
       item(host.t('retry'), () => host.post({ kind: 'retry-server' }));
     }
-    // 30 天用量（usage/stats 由会话建立/回合结束后推送，此处只读最新值）
-    list.append(h('div', { class: 'menu-item static' },
-      h('span', {}, host.t('usage')),
-      h('span', { class: 'menu-item-meta' }, host.usage ? `${host.usage.range} · ${formatTokens(host.usage.totalTokens)} ${host.t('tokens')}` : '…')
-    ));
     item(host.t('mcpServers'), () => {
       host.mcpServers = null;
       this.showPopup(host.gearBtn, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, '…')));
@@ -286,7 +287,7 @@ export class MenuController {
       for (const sv of servers) {
         list.append(h('div', { class: 'menu-item static', title: `${sv.name} · pid ${sv.pid}` },
           h('span', { class: 'menu-item-label' },
-            h('span', { class: 'mcp-dot ok' }, '●'),
+            h('span', { class: 'mcp-dot ok' }),
             h('span', { class: 'mcp-server-name' }, sv.name)
           ),
           h('span', { class: 'menu-item-meta' }, host.t('mcpConnected'))

@@ -24,7 +24,7 @@ export function serveOnFreePort(root, base = 8917) {
     const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     let file = path.join(root, urlPath === '/' ? 'scripts/ui-preview.html' : urlPath);
     if (fs.existsSync(file) && fs.statSync(file).isFile()) {
-      res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' });
+      res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
       fs.createReadStream(file).pipe(res);
       return;
     }

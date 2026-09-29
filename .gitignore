@@ -4,3 +4,13 @@ out/
 .DS_Store
 .mimosa/
 zcode-smoke-marker.txt
+.codegraph/
+
+# 密钥与本地配置
+.env
+*.key
+*.pem
+
+# 本地数据与日志
+logs/
+*.log
