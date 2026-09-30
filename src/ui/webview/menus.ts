@@ -54,7 +54,13 @@ export class MenuController {
     this.popupEl.innerHTML = '';
     this.popupEl.append(content);
     this.popupEl.classList.remove('hidden');
-    const rect = anchor.getBoundingClientRect();
+    this.positionPopup();
+  }
+
+  /** 视口钳制定位：左右贴锚点侧、上下按锚点半屏取向。内容异步替换后必须重调（宽窄变化） */
+  private positionPopup(): void {
+    if (!this.popupAnchor) return;
+    const rect = this.popupAnchor.getBoundingClientRect();
     // 渲染后实测弹窗尺寸，左右上下全部钳制在视口内、并贴齐锚点侧
     const w = this.popupEl.offsetWidth;
     let left = rect.left;
@@ -396,12 +402,14 @@ export class MenuController {
           this.hidePopup();
         }
       },
-        h('span', { class: 'session-menu-title' }, s.title || '(untitled)'),
-        h('span', { class: 'menu-item-meta' },
+        // 对标桌面端搜索列表：标题单行省略，meta（模式 · 相对时间）同行右侧
+        h('span', { class: 'session-menu-name', title: s.title || '(untitled)' }, s.title || '(untitled)'),
+        h('span', { class: 'session-menu-meta' },
           `${s.mode} · ${relTime(s.updatedAt, this.host.t)}${s.status === 'running' ? ' ●' : ''}`)
       ));
     }
     this.popupEl.innerHTML = '';
     this.popupEl.append(list);
+    this.positionPopup(); // 列表异步注入后内容宽窄已变，重新钳制到视口内
   }
 }

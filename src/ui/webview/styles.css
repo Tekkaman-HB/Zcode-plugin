@@ -737,6 +737,7 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .overlay.visible { display: flex; }
 .popup {
   position: fixed; z-index: 50; max-height: 60vh; overflow-y: auto;
+  max-width: calc(100vw - 16px);
   background: var(--surface); border-radius: var(--radius-window);
   box-shadow: var(--shadow-overlay); padding: 6px; min-width: 200px;
   animation: pop-in 140ms var(--ease-out);
@@ -749,7 +750,6 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .mode-menu { min-width: 250px; }
 .mcp-menu { min-width: 240px; }
 .at-crumbs { font-family: var(--font-mono); font-size: 11px; }
-.session-menu-item { display: flex; flex-direction: column; gap: 1px; }
 .slash-name { font-size: 12.5px; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-item.static { cursor: default; }
 .menu-item.static:hover { background: transparent; color: var(--ink-2); transform: none; }
@@ -788,8 +788,10 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .effort-dot.on { background: var(--accent); }
 
 /* 会话列表 */
-.session-menu-title { padding: 6px 10px 4px; font-size: 10.5px; font-weight: 600; color: var(--ink-3); letter-spacing: .03em; text-transform: uppercase; }
-.session-menu-item { display: flex; flex-direction: column; gap: 1px; }
+/* 历史会话下拉（对标桌面端搜索列表）：标题单行省略，meta（模式 · 相对时间）同行右侧 */
+.session-menu-item { display: flex; flex-direction: row; align-items: center; gap: 10px; }
+.session-menu-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 500; color: var(--ink); }
+.session-menu-meta { flex: none; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .session-item-title { font-size: 12.5px; font-weight: 500; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-item-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .session-item-mode {
