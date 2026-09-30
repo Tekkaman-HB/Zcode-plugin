@@ -84,6 +84,8 @@ export class ChatApp {
   pastePending = new Map<string, string>();
   previewEl: HTMLElement | null = null;
   ctxBreakdown: { source: string; chars: number }[] | null = null;
+  /** 用户关闭的进程面板任务（记 TodoWrite callId——仅同任务隐藏，新一轮任务自动重现；会话切换重置） */
+  todoClosedCallId: string | null = null;
   /** 消息渲染快照（id → 内容指纹）：rebuild diff 复用节点，未变化的消息不重建——全量重建是消息流闪烁根因 */
   private rendered = new Map<string, string>();
 
@@ -289,6 +291,7 @@ export class ChatApp {
         this.ixHeadId = null;
         this.mcp = null;
         this.rendered.clear();
+        this.todoClosedCallId = null;
         this.loadCtxSnapshot(d.session.sessionId);
         this.rebuildMessages();
         this.hydrateAttachmentThumbs();
@@ -311,6 +314,7 @@ export class ChatApp {
         this.mcp = null;
         this.ctxBreakdown = null;
         this.rendered.clear();
+        this.todoClosedCallId = null;
         this.queuedCount = 0;
         this.queuedItems = [];
         this.renderQueued();
@@ -522,11 +526,13 @@ export class ChatApp {
           continue; // 增量路径：只改文本节点，零重建
         }
         const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg));
-        if (existing) {
+        if (node && existing) {
           node.classList.add('replaced');
           existing.replaceWith(node);
-        } else {
+        } else if (node) {
           this.insertMessageNode(node, id);
+        } else {
+          existing?.remove(); // 整条被过滤（system-reminder 等）
         }
         this.rendered.set(id, this.snapshotOf(m));
       }
@@ -591,18 +597,22 @@ export class ChatApp {
       const skipStreaming = streaming && id === this.currentAssistantId && el !== null;
       if (!skipStreaming && (!el || this.rendered.get(id) !== snap)) {
         const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg));
-        if (el) {
+        if (node && el) {
           node.classList.add('replaced'); // 替换场景抑制入场动画（.msg:last-child 会重播 fade-up）
           el.replaceWith(node);
-        } else {
+          el = node;
+        } else if (node) {
           this.insertMessageNode(node, id);
           // 顺序校正：期望序 = messages 迭代序，错位时移动（罕见，仅会话重排时发生）
           if (prev && node.previousElementSibling !== prev) prev.insertAdjacentElement('afterend', node);
+          el = node;
+        } else {
+          el?.remove(); // 整条被过滤（system-reminder 等）→ 移除已有节点
+          el = null;
         }
-        el = node;
       }
       this.rendered.set(id, snap);
-      prev = el;
+      if (el) prev = el; // 被过滤消息不入 DOM，链序保持在上一个可见节点
     }
     for (const el of [...this.messagesEl.children]) {
       const id = (el as HTMLElement).dataset?.['messageId'];
@@ -657,7 +667,10 @@ export class ChatApp {
 
   /** 进程面板：最近一次 TodoWrite 的任务进展常驻展示（推导式，消息集变化时刷新） */
   private refreshTodoPanel(): void {
-    renderTodoPanelDom(this.todoPanelEl, extractLatestTodos(this.messages), this.t);
+    renderTodoPanelDom(this.todoPanelEl, extractLatestTodos(this.messages), this.todoClosedCallId, this.t, (callId) => {
+      this.todoClosedCallId = callId;
+      this.refreshTodoPanel();
+    });
   }
 
   /** 运行态判定：回合运行/等待权限/后台任务任一为真 */

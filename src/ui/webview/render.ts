@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./i18n
- * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite() 工具与 renderMessage/renderPart 等部件渲染器（含 AskUserQuestion 问答摘要卡与 TodoWrite 任务清单卡——默认折叠，清单由 ./todoPanel 进程面板常驻展示）
+ * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite()/isSystemReminderText() 工具与 renderMessage（可返回 null=整条被过滤）/renderPart 部件渲染器（AskUserQuestion 问答摘要卡、TodoWrite 任务清单卡——默认折叠；system-reminder 元文本整段过滤，不渲染空壳）
  * [POS]: webview 的渲染层——纯函数式 DOM 构建，chat.ts 持有状态并调用；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -82,6 +82,11 @@ export function isTodoWrite(toolName: string, input: unknown): boolean {
   if (input && typeof input === 'object' && Array.isArray((input as { todos?: unknown }).todos)) return true;
   const token = toolName.trim().toLowerCase().replace(/[\s_]+/g, '');
   return token.includes('todowrite') || token.includes('todoplan');
+}
+
+/** harness 注入给模型的元文本标记——不是给用户看的内容，渲染层整段过滤（数据保留，仅展示过滤） */
+export function isSystemReminderText(text: string): boolean {
+  return text.includes('<system-reminder>');
 }
 
 // ═══════════════ 工具卡片 ═══════════════
@@ -265,7 +270,7 @@ function summarizeInput(input: Record<string, unknown>): string {
 
 // ═══════════════ 消息 ═══════════════
 
-export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: (name: string, url?: string, isImg?: boolean) => void): HTMLElement {
+export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: (name: string, url?: string, isImg?: boolean) => void): HTMLElement | null {
   const role = msg.info?.role ?? 'assistant';
   const el = h('div', { class: `msg msg-${role}`, 'data-message-id': String(msg.info?.messageId ?? '') });
 
@@ -274,7 +279,7 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
     for (const p of msg.parts) {
       if (p.type === 'text') {
         const tp = p as unknown as TextPart;
-        if (!tp.ignored) el2.append(h('div', { class: 'msg-user-text' }, tp.text));
+        if (!tp.ignored && !isSystemReminderText(tp.text ?? '')) el2.append(h('div', { class: 'msg-user-text' }, tp.text));
       } else if (p.type === 'file') {
         const fp = p as unknown as FilePart;
         const name = fp.filename ?? fp.url;
@@ -297,6 +302,7 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
         el2.append(chip);
       }
     }
+    if (!el2.children.length) return null; // 整条被过滤（如 system-reminder）→ 不渲染空壳
     el.append(el2);
     return el;
   }
@@ -310,7 +316,12 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
       hasContent = true;
     }
   }
-  if (!hasContent) el.append(h('div', { class: 'msg-thinking' }, `✳ ${t('thinking')}`));
+  if (!hasContent) {
+    // parts 为空 = 流式起步的空消息 → 保留"思考中"占位；
+    // parts 非空但全部被过滤（system-reminder/ignored）→ 整条不渲染
+    if (msg.parts.length === 0) el.append(h('div', { class: 'msg-thinking' }, `✳ ${t('thinking')}`));
+    else return null;
+  }
   return el;
 }
 
@@ -319,7 +330,7 @@ export function renderPart(p: MessagePart, t: Translate): HTMLElement | null {
   switch (p.type) {
     case 'text': {
       const tp = p as unknown as import('../../protocol/types').TextPart;
-      if (tp.ignored || !tp.text) return null;
+      if (tp.ignored || !tp.text || isSystemReminderText(tp.text)) return null;
       return h('div', { class: 'md', 'data-part-id': tp.partId }, htmlNode(renderMarkdown(tp.text)));
     }
     case 'reasoning': {

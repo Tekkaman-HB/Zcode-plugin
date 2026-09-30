@@ -454,6 +454,15 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .todo-panel-current { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink); }
 .todo-panel-chevron { flex: none; font-size: 10px; color: var(--ink-3); }
 .todo-panel-list { padding: 4px 2px 1px; }
+/* 关闭按钮：仅全部完成时渲染在 chevron 左侧（16px 圆形幽灵，同 attach-chip-x 风格） */
+.todo-panel-close {
+  flex: none; width: 17px; height: 17px; border-radius: 50%; border: none;
+  background: transparent; color: var(--ink-3); cursor: pointer;
+  font-size: 12px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  transition: background-color 100ms var(--ease-out), color 100ms var(--ease-out);
+}
+.todo-panel-close:hover { background: var(--hover); color: var(--ink); }
 .qa-q { font-weight: 600; font-size: 12.5px; }
 .qa-a { color: var(--ink-2); font-size: 12px; margin-top: 1px; }
 

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ./render 的 h()/isTodoWrite()、./events 的 MutableSessionMessage、./i18n 的 Translate
- * [OUTPUT]: 对外提供 extractLatestTodos()（消息集 → 最近任务清单推导）与 renderTodoPanel()（进程面板渲染）与 TodoPanelItem 形状
+ * [OUTPUT]: 对外提供 extractLatestTodos()（消息集 → 最近 TodoWrite 推导，含任务身份 callId）与 renderTodoPanel()（进程面板渲染：点击头行立即重建；全部完成时头行渲染关闭按钮，onClose(callId) 上报）与 TodoPanelInfo/TodoPanelItem 形状
  * [POS]: webview 的进程面板层——消息流与 composer 之间的常驻任务进展（对标桌面端"进程"状态面板）；不持有状态，chat.ts 在消息集变化时调用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -14,27 +14,36 @@ export interface TodoPanelItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+/** 最近一次 TodoWrite 的推导结果：callId 是任务身份（关闭记忆按它记，新一轮任务自动重现） */
+export interface TodoPanelInfo {
+  todos: TodoPanelItem[];
+  callId: string;
+}
+
 /**
- * 反向扫描消息集取最近一次 TodoWrite 的 todos（无则 null）。
+ * 反向扫描消息集取最近一次 TodoWrite（无则 null）。
  * 不持有副本：每次消息集变化重新推导——流式 input 到达、refresh-messages 校准、
  * 会话恢复/清空四条路径共用同一推导，无需单独维护状态生命周期。
+ * 遇到更新的 TodoWrite 调用即停：input 已回填→返回它；未回填（tool.updated 不带 input，
+ * refresh-messages 回来前的窗口）→返回 null 面板暂隐——绝不回显更早的旧任务
+ * （否则新任务开始后旧任务一直占位）。
  */
-export function extractLatestTodos(messages: Map<string, MutableSessionMessage>): TodoPanelItem[] | null {
+export function extractLatestTodos(messages: Map<string, MutableSessionMessage>): TodoPanelInfo | null {
   for (const m of [...messages.values()].reverse()) {
     for (const p of [...m.parts].reverse()) {
       if (p.type !== 'tool') continue;
       const tool = (p as { tool?: string }).tool ?? '';
       const input = (p as { state?: { input?: unknown } }).state?.input as { todos?: unknown } | undefined;
-      // 名字命中但 input 未到（tool.updated 不带 input，待 refresh-messages 回填）：
-      // 跳过该部件沿用上一次已知清单，而非误判为"无任务"
-      if (!isTodoWrite(tool, input) || !Array.isArray(input?.todos)) continue;
+      if (!isTodoWrite(tool, input)) continue;
+      if (!Array.isArray(input?.todos)) return null; // 更新的调用已出现但清单未到：暂隐等待，不回显旧任务
       const todos = input.todos
         .filter((x): x is Record<string, unknown> => Boolean(x) && typeof x === 'object')
         .map((x) => ({
           content: typeof x.content === 'string' ? x.content : '',
           status: x.status === 'completed' ? 'completed' as const : x.status === 'in_progress' ? 'in_progress' as const : 'pending' as const
         }));
-      return todos.length ? todos : null;
+      if (!todos.length) return null;
+      return { todos, callId: (p as { callId?: string }).callId ?? '' };
     }
   }
   return null;
@@ -42,18 +51,27 @@ export function extractLatestTodos(messages: Map<string, MutableSessionMessage>)
 
 /**
  * 渲染进程面板（幂等重建；展开态从旧节点的 .open 类读取，重建间保留）。
- * 头行 = 状态点 + 标题 + 计数 + 当前任务（单行省略）+ chevron；展开追加完整清单（复用 .todo-item 三态样式）。
+ * 头行 = 状态点 + 标题 + 计数 + 当前任务（单行省略）+ [全部完成时的关闭按钮] + chevron；
+ * 展开追加完整清单（复用 .todo-item 三态样式）。
+ * 关闭语义：info.callId === closedCallId 时隐藏——仅同任务隐藏，新一轮 TodoWrite（新 callId）重现。
  */
-export function renderTodoPanel(el: HTMLElement, todos: TodoPanelItem[] | null, t: Translate): void {
+export function renderTodoPanel(
+  el: HTMLElement,
+  info: TodoPanelInfo | null,
+  closedCallId: string | null,
+  t: Translate,
+  onClose: (callId: string) => void
+): void {
   const wasOpen = el.classList.contains('open');
   el.innerHTML = '';
   el.classList.remove('open');
-  if (!todos || !todos.length) {
+  if (!info || !info.todos.length || info.callId === closedCallId) {
     el.classList.add('hidden');
     return;
   }
   el.classList.remove('hidden');
 
+  const todos = info.todos;
   const done = todos.filter((x) => x.status === 'completed').length;
   const allDone = done === todos.length;
   const current = todos.find((x) => x.status === 'in_progress');
@@ -63,13 +81,23 @@ export function renderTodoPanel(el: HTMLElement, todos: TodoPanelItem[] | null, 
     h('span', { class: `todo-dot ${dot}` }, allDone ? '✓' : ''),
     h('span', { class: 'todo-panel-title' }, t('progressPanel')),
     h('span', { class: 'todo-panel-count' }, `${done}/${todos.length}`),
-    h('span', { class: 'todo-panel-current' }, allDone ? t('todoAllDone') : current?.content ?? ''),
-    h('span', { class: 'todo-panel-chevron' }, wasOpen ? '▾' : '▸')
+    h('span', { class: 'todo-panel-current' }, allDone ? t('todoAllDone') : current?.content ?? '')
   );
+  // 关闭按钮：仅全部完成时出现（未完成的任务没有可关性）；点击不冒泡（不触发展开/折叠）
+  if (allDone) {
+    const closeBtn = h('button', { class: 'todo-panel-close', title: t('todoClose') }, '×');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onClose(info.callId);
+    });
+    head.append(closeBtn);
+  }
+  head.append(h('span', { class: 'todo-panel-chevron' }, wasOpen ? '▾' : '▸'));
   head.addEventListener('click', () => {
-    const open = el.classList.toggle('open');
-    const chevron = el.querySelector('.todo-panel-chevron');
-    if (chevron) chevron.textContent = open ? '▾' : '▸';
+    // 翻转意图后立即重建：清单 DOM 只由 renderTodoPanel 落地——只 toggle class 不重建，
+    // 点击会"看似无反应"（class 延迟到下次消息刷新才体现=自动打开/折叠不上的根因）
+    el.classList.toggle('open');
+    renderTodoPanel(el, info, closedCallId, t, onClose);
   });
   el.append(head);
 
