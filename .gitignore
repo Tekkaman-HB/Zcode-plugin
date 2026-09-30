@@ -5,6 +5,7 @@ out/
 .mimosa/
 zcode-smoke-marker.txt
 .codegraph/
+.playwright-mcp/
 
 # 密钥与本地配置
 .env

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 node:fs/node:path/node:child_process + 全局 playwright（createRequire 解析）+ ./preview-server
- * [OUTPUT]: 无人值守视觉级联回归（`npm run theme-check`）：四主题令牌互异 / dark+hc 并存 HC 胜出 / 字体子集懒加载
+ * [OUTPUT]: 无人值守视觉级联回归（`npm run theme-check`）：四主题令牌互异 / dark+hc 并存 HC 胜出 / 字体子集懒加载 / CSP style-src 'unsafe-inline' 看守
  * [POS]: scripts/ 的断言层，与 ui-preview.mjs（人看）互补；无浏览器时降级为 CSS 块序静态断言
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -25,6 +25,10 @@ function staticOrderCheck() {
   const hcAt = css.indexOf('body.vscode-high-contrast {');
   const hclAt = css.indexOf('body.vscode-high-contrast-light {');
   ok('CSS 块序：high-contrast 声明于 vscode-dark 之后', hcAt > darkAt && hclAt > darkAt);
+  // CSP 看守（0.5.x 事故：无 'unsafe-inline' 时 setAttribute('style',...) 被静默剥离——
+  // 色条通条蓝/彩点隐形，而 CSSOM 定位不受管，半好半坏最难排查）
+  const provider = fs.readFileSync(path.join(root, 'src/ui/chatProvider.ts'), 'utf8');
+  ok("CSP style-src 含 'unsafe-inline'", /style-src[^;]*'unsafe-inline'/.test(provider));
 }
 
 // ── 浏览器断言：computed tokens + 字体懒加载 ──

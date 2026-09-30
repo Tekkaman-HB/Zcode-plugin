@@ -42,6 +42,8 @@ export interface EventHost {
   dirty: Set<string>;
   currentAssistantId: string | null;
   ctxBreakdown: { source: string; chars: number }[] | null;
+  setCtxBreakdown(items: { source: string; chars: number }[]): void;
+  saveCtxSnapshot(): void;
   pendingPermissions: Map<string, PermissionRequestParams>;
   pendingUserInputs: Map<string, UserInputRequestParams>;
   ixDrafts: Map<string, InteractionDraft>;
@@ -161,9 +163,9 @@ export function applySessionEvent(host: EventHost, ev: SessionEvent): void {
         touched2 = true;
       }
       if (Array.isArray(p.contextUsageBreakdown)) {
-        host.ctxBreakdown = (p.contextUsageBreakdown as { source?: string; chars?: number }[])
+        host.setCtxBreakdown((p.contextUsageBreakdown as { source?: string; chars?: number }[])
           .filter((e) => typeof e.source === 'string' && typeof e.chars === 'number')
-          .map((e) => ({ source: e.source!, chars: e.chars! }));
+          .map((e) => ({ source: e.source!, chars: e.chars! })));
         touched2 = true;
       }
       for (const key of ['contextUsed', 'contextWindow', 'totalTokenCount', 'status', 'turnCount', 'backgroundJobs']) {
@@ -174,6 +176,7 @@ export function applySessionEvent(host: EventHost, ev: SessionEvent): void {
         }
       }
       if (touched2) {
+        host.saveCtxSnapshot();
         host.renderContextRing();
         if (host.isOpenFor(host.ctxRingBtn)) host.toggleContextMenu(true);
       }

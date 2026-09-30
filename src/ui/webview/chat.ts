@@ -82,6 +82,36 @@ export class ChatApp {
   pastePending = new Map<string, string>();
   previewEl: HTMLElement | null = null;
   ctxBreakdown: { source: string; chars: number }[] | null = null;
+
+  // 上下文快照（used/window/breakdown）按 sessionId 落 localStorage——这些值只随回合中段的
+  // session.updated 推送（协议无拉取口），webview 重载/resume 后弹层与圆环仍能展示最后一次已知值
+  setCtxBreakdown(items: { source: string; chars: number }[]): void {
+    this.ctxBreakdown = items;
+  }
+
+  saveCtxSnapshot(): void {
+    const proj = this.session?.projection as { contextUsed?: number; contextWindow?: number } | undefined;
+    const sid = this.session?.info.sessionId;
+    if (!sid || !proj || !this.ctxBreakdown?.length) return;
+    try {
+      localStorage.setItem(`zcode.ctxSnapshot.${sid}`, JSON.stringify(
+        { used: proj.contextUsed, win: proj.contextWindow, breakdown: this.ctxBreakdown }));
+    } catch { /* 配额满/隐私模式静默 */ }
+  }
+
+  private loadCtxSnapshot(sessionId: string): void {
+    try {
+      const raw = localStorage.getItem(`zcode.ctxSnapshot.${sessionId}`);
+      if (!raw) return;
+      const s = JSON.parse(raw) as { used?: number; win?: number; breakdown?: { source: string; chars: number }[] };
+      if (Array.isArray(s.breakdown)) this.ctxBreakdown = s.breakdown;
+      const proj = this.session?.projection as Record<string, unknown> | undefined;
+      if (!proj) return;
+      if (typeof s.used === 'number' && s.used > 0) { proj.contextUsed = s.used; proj.totalTokenCount = s.used; }
+      if (typeof s.win === 'number' && s.win > 0) proj.contextWindow = s.win;
+    } catch { /* 脏数据忽略 */ }
+  }
+
   historyBtn!: HTMLButtonElement;
   gearBtn!: HTMLButtonElement;
   ctxRingBtn!: HTMLButtonElement;
@@ -248,6 +278,7 @@ export class ChatApp {
         this.ixDrafts.clear();
         this.ixHeadId = null;
         this.mcp = null;
+        this.loadCtxSnapshot(d.session.sessionId);
         this.rebuildMessages();
         this.hydrateAttachmentThumbs();
         this.renderHeaderControls();
@@ -257,6 +288,9 @@ export class ChatApp {
       }
       case 'session-closed':
         resetToolCollapseState();
+        if (this.session) {
+          try { localStorage.removeItem(`zcode.ctxSnapshot.${this.session.info.sessionId}`); } catch { /* 同上 */ }
+        }
         this.session = null;
         this.messages.clear();
         this.pendingPermissions.clear();

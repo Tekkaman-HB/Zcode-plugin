@@ -265,7 +265,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <html lang="${this.locale}">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
+<!-- style-src 必须带 'unsafe-inline'：h() 以 setAttribute('style',...) 写分段宽度/来源色，
+     无它则 CSP 静默剥离全部 style 属性（CSSOM el.style.xxx 不受管，故弹层定位照常——半好半坏最难排查） -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${styles}">
 <title>ZCode</title>

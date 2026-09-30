@@ -2,6 +2,24 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<script>
+// ?csp=strict → 复现修复前 CSP（style 属性被静默剥离：色条通条蓝/彩点隐形）
+// ?csp=fixed  → 修复后 CSP（style-src 'unsafe-inline'，与 chatProvider 等价）
+// 默认无 CSP（历史行为）。script-src 放宽以跑通本页无 nonce 的内联 harness。
+(function () {
+  var mode = new URLSearchParams(location.search).get('csp');
+  if (!mode) return;
+  var styleSrc = mode === 'fixed' ? "style-src 'self' 'unsafe-inline'" : "style-src 'self'";
+  var m = document.createElement('meta');
+  m.setAttribute('http-equiv', 'Content-Security-Policy');
+  m.setAttribute('content', "default-src 'none'; " + styleSrc + "; script-src 'self' 'unsafe-inline'; img-src * data:; font-src *");
+  document.head.appendChild(m);
+  document.addEventListener('DOMContentLoaded', function () {
+    var b = document.getElementById('fire-ctx');
+    if (b) b.value = 'CSP:' + mode + '（注入 breakdown）';
+  });
+})();
+</script>
 <title>ZCode 真实产物驱动页（协议桥注入）</title>
 <link rel="stylesheet" href="/out/webview/styles.css">
 <style>html,body{height:100%;margin:0}</style>
