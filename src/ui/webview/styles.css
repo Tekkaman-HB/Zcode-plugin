@@ -292,6 +292,8 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px 14px 10px; }
 /* 入场动画只给最新一条消息：流式增量不重建节点不重放；全量重建时历史不整屏闪 */
 .msg:last-child { animation: fade-up 220ms var(--ease-out); margin: 10px 0; }
+/* diff 更新替换已有消息（工具状态变化/校准）：抑制入场动画——否则每次替换都重播=闪烁 */
+.msg.replaced { animation: none; margin: 10px 0; }
 .msg-user-block { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .msg-user-text {
   background: var(--field); border: 1px solid var(--line);
@@ -439,6 +441,19 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .todo-dot-pending { border: 1.5px solid var(--line-strong); color: transparent; }
 .todo-text { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
 .todo-completed .todo-text { color: var(--ink-3); }
+
+/* ═══════════ 进程面板（常驻任务进展，对标桌面端"进程"状态面板） ═══════════ */
+.todo-panel {
+  flex: none; margin: 0 14px 6px; padding: 7px 11px; border-radius: var(--radius-control);
+  background: var(--inset); box-shadow: var(--shadow-hairline);
+  animation: fade-up 220ms var(--ease-out);
+}
+.todo-panel-head { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; user-select: none; }
+.todo-panel-title { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink-2); }
+.todo-panel-count { flex: none; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.todo-panel-current { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink); }
+.todo-panel-chevron { flex: none; font-size: 10px; color: var(--ink-3); }
+.todo-panel-list { padding: 4px 2px 1px; }
 .qa-q { font-weight: 600; font-size: 12.5px; }
 .qa-a { color: var(--ink-2); font-size: 12px; margin-top: 1px; }
 
@@ -718,6 +733,7 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
   animation: pop-in 140ms var(--ease-out);
 }
 .menu { display: flex; flex-direction: column; gap: 1px; min-width: 220px; }
+.model-menu { min-width: 300px; }
 .popup.slash { min-width: 300px; }
 .account-menu { min-width: 260px; }
 .at-menu { min-width: 280px; }
@@ -743,6 +759,12 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .menu-item-label { font-weight: 500; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-item-meta { margin-left: auto; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
 .menu-empty { padding: 10px 12px; font-size: 12px; color: var(--ink-3); }
+/* 模型菜单：选中模型 tint 底色 + 档位小胶囊（当前档位 accent 实底白字） */
+.menu-item.selected { background: var(--accent-tint); }
+.menu-item.selected .menu-item-label { color: var(--accent-ink); }
+.reasoning-levels .lv-btn { width: auto; padding: 2px 8px; font-size: 11px; border-radius: var(--radius-chip); flex: none; }
+.lv-btn.active { background: var(--accent); color: #fff; }
+.lv-btn.active:hover { background: var(--accent-ink); transform: none; }
 .mode-check { margin-left: auto; color: var(--accent); font-size: 12px; flex: none; }
 .mode-icon { color: var(--ink-3); flex: none; }
 .mode-name { font-weight: 500; color: var(--ink); }

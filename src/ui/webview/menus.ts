@@ -137,16 +137,15 @@ export class MenuController {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(m);
     }
-    const list = h('div', { class: 'menu' });
+    const list = h('div', { class: 'menu model-menu' });
     for (const [group, items] of groups) {
       list.append(h('div', { class: 'menu-group' }, group));
       for (const m of items) {
         const selected = current?.providerId === m.ref.providerId && current?.modelId === m.ref.modelId;
-        const row = h('div', { class: `menu-item ${selected ? 'selected' : ''}` },
-          h('span', { class: 'menu-item-label' },
-            h('span', {}, m.label),
-            h('span', { class: 'menu-item-meta' }, `${fmtContext(m.contextWindow)}`)
-          ),
+        // 行布局：模型名左（可省略），1M 窗口标识与档位组推右（meta 自带 margin-left:auto）
+        const row = h('div', { class: `menu-item model-item ${selected ? 'selected' : ''}` },
+          h('span', { class: 'menu-item-label' }, m.label),
+          h('span', { class: 'menu-item-meta' }, `${fmtContext(m.contextWindow)}`),
           m.reasoning
             ? h('span', { class: 'reasoning-levels' },
                 ...m.reasoning.levels.map((lv) =>

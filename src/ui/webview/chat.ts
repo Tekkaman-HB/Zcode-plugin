@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单）、./icons、./format
- * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 应用壳 + 桥接消息入口；EventHost/QueueHost/MenuHost 的宿主实现）
- * [POS]: webview 的中枢——持有全部共享状态，事件适配/交互队列/菜单渲染委托给子模块；slash/@ 弹层因需改写输入框文本留在本层
+ * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单）、./todoPanel（进程面板渲染）、./icons、./format
+ * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 应用壳 + 桥接消息入口；EventHost/QueueHost/MenuHost 的宿主实现）；含 diff 式 rebuildMessages（快照复用节点 + 流式消息跳过，根治全量重建闪烁）
+ * [POS]: webview 的中枢——持有全部共享状态，事件适配/交互队列/菜单/进程面板渲染委托给子模块；slash/@ 弹层因需改写输入框文本留在本层
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type {
@@ -20,6 +20,7 @@ import { formatTokens, fmtContext } from './format';
 import { applySessionEvent, type ChatSessionState, type MutableSessionMessage } from './events';
 import { renderPermissionCards } from './queue';
 import { MenuController } from './menus';
+import { extractLatestTodos, renderTodoPanel as renderTodoPanelDom } from './todoPanel';
 
 /** 模式 chip 短名（中文对齐桌面端语义） */
 const MODE_CHIP_LABEL: Record<string, string> = {
@@ -67,6 +68,7 @@ export class ChatApp {
   modeBtn!: HTMLButtonElement;
   titleEl!: HTMLElement;
   overlayEl!: HTMLElement;
+  todoPanelEl!: HTMLElement;
   attachRow!: HTMLElement;
   queuedEl!: HTMLElement;
   queuedCount = 0;
@@ -82,6 +84,12 @@ export class ChatApp {
   pastePending = new Map<string, string>();
   previewEl: HTMLElement | null = null;
   ctxBreakdown: { source: string; chars: number }[] | null = null;
+  /** 消息渲染快照（id → 内容指纹）：rebuild diff 复用节点，未变化的消息不重建——全量重建是消息流闪烁根因 */
+  private rendered = new Map<string, string>();
+
+  private snapshotOf(m: MutableSessionMessage): string {
+    return `${JSON.stringify(m.info)}\u0000${JSON.stringify(m.parts)}`;
+  }
 
   // 上下文快照（used/window/breakdown）按 sessionId 落 localStorage——这些值只随回合中段的
   // session.updated 推送（协议无拉取口），webview 重载/resume 后弹层与圆环仍能展示最后一次已知值
@@ -158,6 +166,7 @@ export class ChatApp {
     this.banner = h('div', { class: 'banner hidden' });
     this.messagesEl = h('div', { class: 'messages', id: 'messages' });
     this.overlayEl = h('div', { class: 'overlay' });
+    this.todoPanelEl = h('div', { class: 'todo-panel hidden' });
 
     // 输入区（对标 Claude Code）：附件 chips 行 → 文本框 → 控制栏
     // 左：+ 附件 / @ 引用 / 模型 / 齿轮(配置收纳)  右：模式 / 发送
@@ -189,6 +198,7 @@ export class ChatApp {
       this.banner,
       this.messagesEl,
       this.overlayEl,
+      this.todoPanelEl,
       this.menus.popupEl,
       composer
     );
@@ -278,6 +288,7 @@ export class ChatApp {
         this.ixDrafts.clear();
         this.ixHeadId = null;
         this.mcp = null;
+        this.rendered.clear();
         this.loadCtxSnapshot(d.session.sessionId);
         this.rebuildMessages();
         this.hydrateAttachmentThumbs();
@@ -299,6 +310,7 @@ export class ChatApp {
         this.ixHeadId = null;
         this.mcp = null;
         this.ctxBreakdown = null;
+        this.rendered.clear();
         this.queuedCount = 0;
         this.queuedItems = [];
         this.renderQueued();
@@ -416,7 +428,9 @@ export class ChatApp {
           } as MessagePart));
           this.messages.set(id, m as MutableSessionMessage);
         }
-        this.currentAssistantId = null;
+        // 回合运行中保留流式消息 id：rebuild 的"流式消息跳过重建"依赖它识别；
+        // 回合结束（status 已归 idle）才复位——下轮重建走 markdown 权威渲染
+        if (this.session?.projection.status !== 'running') this.currentAssistantId = null;
         // contextUsed 权威校准：assistant 消息最后一个 step-finish part 的 tokens 账目
         const lastFinish = (() => {
           for (const m of [...this.messages.values()].reverse()) {
@@ -504,16 +518,23 @@ export class ChatApp {
         if (!m) continue;
         const existing = this.messagesEl.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
         if (existing && streaming && this.updateMessageIncrementally(existing as HTMLElement, m)) {
+          this.rendered.set(id, this.snapshotOf(m)); // 增量路径内容已变，快照同步防下次 rebuild 误判重建
           continue; // 增量路径：只改文本节点，零重建
         }
         const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg));
-        if (existing) existing.replaceWith(node);
-        else this.insertMessageNode(node, id);
+        if (existing) {
+          node.classList.add('replaced');
+          existing.replaceWith(node);
+        } else {
+          this.insertMessageNode(node, id);
+        }
+        this.rendered.set(id, this.snapshotOf(m));
       }
       this.dirty.clear();
       if (nearBottom) this.scrollBottom();
       this.renderThinkingState();
       this.hydrateAttachmentThumbs();
+      this.refreshTodoPanel();
     });
   }
 
@@ -555,14 +576,45 @@ export class ChatApp {
     void id;
   }
 
+  /**
+   * diff 式重建：快照未变的消息节点原位保留（不重播 fade-up、不打断 raw 流式态），
+   * 只替换内容有差异的消息；流式中的当前消息即使快照变了也保留增量 raw 态——
+   * md 重建后下一个 delta 又转 raw，来回切换是"文字不断闪烁"的另一根因。
+   * 权限卡/thinking-cursor/error-toast 无 data-message-id，不在清理范围。
+   */
   private rebuildMessages(): void {
-    this.messagesEl.innerHTML = '';
-    for (const m of this.messages.values()) {
-      this.messagesEl.append(renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg)));
+    const streaming = this.session?.projection.status === 'running';
+    let prev: Element | null = null;
+    for (const [id, m] of this.messages) {
+      const snap = this.snapshotOf(m);
+      let el = this.messagesEl.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
+      const skipStreaming = streaming && id === this.currentAssistantId && el !== null;
+      if (!skipStreaming && (!el || this.rendered.get(id) !== snap)) {
+        const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg));
+        if (el) {
+          node.classList.add('replaced'); // 替换场景抑制入场动画（.msg:last-child 会重播 fade-up）
+          el.replaceWith(node);
+        } else {
+          this.insertMessageNode(node, id);
+          // 顺序校正：期望序 = messages 迭代序，错位时移动（罕见，仅会话重排时发生）
+          if (prev && node.previousElementSibling !== prev) prev.insertAdjacentElement('afterend', node);
+        }
+        el = node;
+      }
+      this.rendered.set(id, snap);
+      prev = el;
+    }
+    for (const el of [...this.messagesEl.children]) {
+      const id = (el as HTMLElement).dataset?.['messageId'];
+      if (id && !this.messages.has(id)) {
+        el.remove();
+        this.rendered.delete(id);
+      }
     }
     renderPermissionCards(this);
     this.scrollBottom();
     this.renderThinkingState();
+    this.refreshTodoPanel();
   }
 
   markDirtyPermissions(): void {
@@ -601,6 +653,11 @@ export class ChatApp {
 <circle cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round"
     stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${(c * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 8 8)"/>
 </svg>`;
+  }
+
+  /** 进程面板：最近一次 TodoWrite 的任务进展常驻展示（推导式，消息集变化时刷新） */
+  private refreshTodoPanel(): void {
+    renderTodoPanelDom(this.todoPanelEl, extractLatestTodos(this.messages), this.t);
   }
 
   /** 运行态判定：回合运行/等待权限/后台任务任一为真 */

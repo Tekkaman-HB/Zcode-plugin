@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./i18n
- * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite() 工具与 renderMessage/renderPart 等部件渲染器（含 AskUserQuestion 问答摘要卡与 TodoWrite 任务清单卡）
+ * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite() 工具与 renderMessage/renderPart 等部件渲染器（含 AskUserQuestion 问答摘要卡与 TodoWrite 任务清单卡——默认折叠，清单由 ./todoPanel 进程面板常驻展示）
  * [POS]: webview 的渲染层——纯函数式 DOM 构建，chat.ts 持有状态并调用；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -97,9 +97,13 @@ const TOOL_STATUS_ICON: Record<string, string> = {
 /** 用户手动折叠的 partId 集合：重渲染（流式 delta/回合结束校准）时保持折叠选择，其余一律默认展开 */
 const userCollapsed = new Set<string>();
 
-/** 会话切换时清空折叠记忆 */
+/** 用户手动展开的 partId 集合：TodoWrite 卡默认折叠（清单已由进程面板常驻展示，消息流卡仅留审计），展开选择同样跨重渲染保留 */
+const userExpanded = new Set<string>();
+
+/** 会话切换时清空折叠/展开记忆 */
 export function resetToolCollapseState(): void {
   userCollapsed.clear();
+  userExpanded.clear();
 }
 
 export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
@@ -190,11 +194,23 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
   );
   if (body.children.length) {
     // 折叠状态由 .collapsed 类驱动（body 默认显示）；默认一律展开（Bash/Edit 内容直接可见），
-    // 仅用户手动折叠过的 partId 保持折叠——流式重渲染不会弹开用户的选择
-    const chevron = h('span', { class: 'tool-chevron' }, '▾');
+    // 仅用户手动折叠过的 partId 保持折叠——流式重渲染不会弹开用户的选择；
+    // 例外：TodoWrite 卡默认折叠（进程面板常驻展示清单），用户展开过则保持展开
+    const startCollapsed = isTodo ? !userExpanded.has(part.partId) : userCollapsed.has(part.partId);
+    const chevron = h('span', { class: 'tool-chevron' }, startCollapsed ? '▸' : '▾');
     header.append(chevron);
     (header as HTMLElement).addEventListener('click', () => {
-      if (userCollapsed.has(part.partId)) {
+      if (isTodo) {
+        if (userExpanded.has(part.partId)) {
+          userExpanded.delete(part.partId);
+          card.classList.add('collapsed');
+          chevron.textContent = '▸';
+        } else {
+          userExpanded.add(part.partId);
+          card.classList.remove('collapsed');
+          chevron.textContent = '▾';
+        }
+      } else if (userCollapsed.has(part.partId)) {
         userCollapsed.delete(part.partId);
         card.classList.remove('collapsed');
         chevron.textContent = '▾';
@@ -204,9 +220,8 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
         chevron.textContent = '▸';
       }
     });
-    if (userCollapsed.has(part.partId)) {
+    if (startCollapsed) {
       card.classList.add('collapsed');
-      chevron.textContent = '▸';
     }
   }
   return card;
