@@ -196,7 +196,7 @@ export class ChatApp {
         ),
         h('div', { class: 'composer-bar-right' },
           this.ctxRingBtn = h('button', { class: 'ctx-ring-btn hidden', onclick: () => this.toggleContextMenu() }),
-          this.modeBtn = h('button', { class: 'composer-chip', onclick: () => this.toggleModeMenu() }, '…'),
+          this.modeBtn = h('button', { class: 'bar-icon-btn', onclick: () => this.toggleModeMenu() }, '…'),
           this.sendBtn = h('button', { class: 'send-btn', title: this.t('send'), onclick: () => this.onSend() }, '↑') as HTMLButtonElement
         )
       )
@@ -250,6 +250,12 @@ export class ChatApp {
       this.hidePopup();
     });
     this.renderOverlay();
+    // 版本标记：从 main.js 的安装路径解析包版本，悬停标题即可核对"当前窗口跑的是哪个包"
+    // （排障利器：磁盘已装新版但扩展宿主未重载时，这里会显示旧版本号）
+    const scriptSrc = document.querySelector('script')?.getAttribute('src') ?? '';
+    const bundleVer = scriptSrc.match(/zcode-vscode-([0-9.]+)\//)?.[1] ?? 'dev';
+    this.titleEl.title = `ZCode webview v${bundleVer}`;
+    console.info(`[zcode-webview] bundle v${bundleVer}`);
   }
 
   // ═══════════════ 桥接消息入口 ═══════════════
@@ -596,6 +602,13 @@ export class ChatApp {
     for (const [id, m] of this.messages) {
       const snap = this.snapshotOf(m);
       let el = this.messagesEl.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
+      // 中断回合遗留的空壳助手消息（resume/中止后 parts 永远为空，渲染成永不停止的"思考中"）：
+      // 非当前流式消息一律不渲染——正在流式的空消息（id===currentAssistantId）保留占位
+      if ((m.info?.role ?? '') === 'assistant' && !m.parts.length && id !== this.currentAssistantId) {
+        el?.remove();
+        this.rendered.set(id, snap);
+        continue;
+      }
       const skipStreaming = streaming && id === this.currentAssistantId && el !== null;
       if (!skipStreaming && (!el || this.rendered.get(id) !== snap)) {
         const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg));

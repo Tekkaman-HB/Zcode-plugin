@@ -374,7 +374,7 @@ export function renderPart(p: MessagePart, t: Translate): HTMLElement | null {
       const rp = p as unknown as ReasoningPart;
       if (!rp.text) return null;
       return h('details', { class: 'reasoning', 'data-part-id': rp.partId },
-        h('summary', {}, `✻ ${t('thinking')}`),
+        h('summary', {}, `✻ ${t('thoughtProcess')}`),
         h('div', { class: 'md reasoning-body' }, htmlNode(renderMarkdown(rp.text)))
       );
     }
