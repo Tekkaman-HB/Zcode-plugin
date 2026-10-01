@@ -20,7 +20,7 @@ import { formatTokens, fmtContext } from './format';
 import { applySessionEvent, normalizeMessageId, type ChatSessionState, type MutableSessionMessage } from './events';
 import { renderPermissionCards } from './queue';
 import { MenuController } from './menus';
-import { extractLatestTodos, renderTodoPanel as renderTodoPanelDom } from './todoPanel';
+import { extractLatestTodos, renderTodoPanel as renderTodoPanelDom, loadClosedTodoCallIds, saveClosedTodoCallIds } from './todoPanel';
 
 /** 模式 chip 短名（中文对齐桌面端语义） */
 const MODE_CHIP_LABEL: Record<string, string> = {
@@ -77,20 +77,27 @@ export class ChatApp {
   interactionOrder: { type: 'permission' | 'input'; id: string }[] = [];
   /** 当前展示的队列位次（tab 点击切换；提交后原地指向下一条） */
   ixSelected = 0;
-  thinkTimer: ReturnType<typeof setInterval> | undefined;
-  thinkStart = 0;
   pasteSeq = 0;
   previewRegistry = new Map<string, string>();
   pastePending = new Map<string, string>();
   previewEl: HTMLElement | null = null;
   ctxBreakdown: { source: string; chars: number }[] | null = null;
-  /** 用户关闭的进程面板任务（记 TodoWrite callId——仅同任务隐藏，新一轮任务自动重现；会话切换重置） */
-  todoClosedCallId: string | null = null;
+  /** 用户关闭的进程面板任务集合（TodoWrite callId，localStorage 持久化——跨会话切换/重载保留；新一轮任务新 callId 自动重现） */
+  todoClosedCallIds = loadClosedTodoCallIds();
   /** 消息渲染快照（id → 内容指纹）：rebuild diff 复用节点，未变化的消息不重建——全量重建是消息流闪烁根因 */
   private rendered = new Map<string, string>();
 
   private snapshotOf(m: MutableSessionMessage): string {
     return `${JSON.stringify(m.info)}\u0000${JSON.stringify(m.parts)}`;
+  }
+
+  /** 服务端部件方言归一：partId 缺失补齐、callID→callId（折叠记忆/增量更新/TodoWrite 任务身份依赖）——快照与权威刷新两路共用 */
+  private normalizeParts(m: MutableSessionMessage, id: string): void {
+    m.parts = (m.parts ?? []).map((pp, i) => ({
+      ...pp,
+      partId: (pp as { partId?: string }).partId ?? `${id}-p${i}`,
+      callId: (pp as { callId?: string }).callId ?? (pp as { callID?: string }).callID
+    } as MessagePart));
   }
 
   // 上下文快照（used/window/breakdown）按 sessionId 落 localStorage——这些值只随回合中段的
@@ -285,6 +292,7 @@ export class ChatApp {
         this.messages.clear();
         for (const m of d.messages ?? []) {
           const id = normalizeMessageId(m as MutableSessionMessage) || `m-${this.messages.size}`;
+          this.normalizeParts(m as MutableSessionMessage, id);
           this.messages.set(id, m as MutableSessionMessage);
         }
         this.pendingPermissions.clear();
@@ -293,7 +301,6 @@ export class ChatApp {
         this.ixHeadId = null;
         this.mcp = null;
         this.rendered.clear();
-        this.todoClosedCallId = null;
         this.loadCtxSnapshot(d.session.sessionId);
         this.rebuildMessages();
         this.hydrateAttachmentThumbs();
@@ -316,7 +323,6 @@ export class ChatApp {
         this.mcp = null;
         this.ctxBreakdown = null;
         this.rendered.clear();
-        this.todoClosedCallId = null;
         this.queuedCount = 0;
         this.queuedItems = [];
         this.renderQueued();
@@ -426,12 +432,7 @@ export class ChatApp {
         this.messages.clear();
         for (const m of msg.data.messages ?? []) {
           const id = normalizeMessageId(m as MutableSessionMessage) || `m-${this.messages.size}`;
-          // 服务端部件无 partId、callId 写作 callID——归一化（折叠记忆/增量更新依赖 partId）
-          (m as MutableSessionMessage).parts = (m.parts ?? []).map((pp, i) => ({
-            ...pp,
-            partId: (pp as { partId?: string }).partId ?? `${id}-p${i}`,
-            callId: (pp as { callId?: string }).callId ?? (pp as { callID?: string }).callID
-          } as MessagePart));
+          this.normalizeParts(m as MutableSessionMessage, id);
           this.messages.set(id, m as MutableSessionMessage);
         }
         // 回合运行中保留流式消息 id：rebuild 的"流式消息跳过重建"依赖它识别；
@@ -540,7 +541,6 @@ export class ChatApp {
       }
       this.dirty.clear();
       if (nearBottom) this.scrollBottom();
-      this.renderThinkingState();
       this.hydrateAttachmentThumbs();
       this.refreshTodoPanel();
     });
@@ -588,7 +588,7 @@ export class ChatApp {
    * diff 式重建：快照未变的消息节点原位保留（不重播 fade-up、不打断 raw 流式态），
    * 只替换内容有差异的消息；流式中的当前消息即使快照变了也保留增量 raw 态——
    * md 重建后下一个 delta 又转 raw，来回切换是"文字不断闪烁"的另一根因。
-   * 权限卡/thinking-cursor/error-toast 无 data-message-id，不在清理范围。
+   * 权限卡/error-toast 无 data-message-id，不在清理范围。
    */
   private rebuildMessages(): void {
     const streaming = this.session?.projection.status === 'running';
@@ -632,7 +632,6 @@ export class ChatApp {
     }
     renderPermissionCards(this);
     this.scrollBottom();
-    this.renderThinkingState();
     this.refreshTodoPanel();
   }
 
@@ -676,8 +675,9 @@ export class ChatApp {
 
   /** 进程面板：最近一次 TodoWrite 的任务进展常驻展示（推导式，消息集变化时刷新） */
   private refreshTodoPanel(): void {
-    renderTodoPanelDom(this.todoPanelEl, extractLatestTodos(this.messages), this.todoClosedCallId, this.t, (callId) => {
-      this.todoClosedCallId = callId;
+    renderTodoPanelDom(this.todoPanelEl, extractLatestTodos(this.messages), this.todoClosedCallIds, this.t, (callId) => {
+      this.todoClosedCallIds.add(callId);
+      saveClosedTodoCallIds(this.todoClosedCallIds);
       this.refreshTodoPanel();
     });
   }
@@ -686,49 +686,6 @@ export class ChatApp {
   private isBusyLike(): boolean {
     const st = this.session?.projection.status;
     return st === 'running' || st === 'waiting' || (this.session?.projection.backgroundJobs?.length ?? 0) > 0;
-  }
-
-  private renderThinkingState(): void {
-    // 常驻策略：回合运行中指示器始终钉在消息流底部（流式/工具间隙都有动效+计时）；
-    // 后台任务期间也显示（文案切换），避免"看着空闲其实还在跑"的误判。
-    // 动效走 CSS（像素网格 pixel-on + shimmer 文字），计时器只刷秒数
-    const active = this.isBusyLike();
-    const fgRunning = this.session?.projection.status === 'running' || this.session?.projection.status === 'waiting';
-    let thinking = this.messagesEl.querySelector('.thinking-cursor');
-    if (active) {
-      if (!thinking) {
-        thinking = h('div', { class: 'thinking-cursor msg msg-assistant' });
-        this.messagesEl.append(thinking);
-        this.thinkStart = Date.now();
-        const el = thinking;
-        // 像素网格加载器（对标 Beautiful UI Loading State）：3×3 圆点错峰点亮
-        const grid = h('span', { class: 'think-pixel' });
-        for (let i = 0; i < 9; i++) grid.append(h('span', { class: 'think-px', style: `animation-delay:${(i % 3) * 140 + Math.floor(i / 3) * 90}ms` }));
-        const label = h('span', { class: 'think-label' },
-          fgRunning ? this.t('thinking') : this.t('bgTask'));
-        const secs = h('span', { class: 'think-secs' }, '0s');
-        el.append(grid, label, secs);
-        if (this.thinkTimer) clearInterval(this.thinkTimer);
-        this.thinkTimer = setInterval(() => {
-          if (!document.body.contains(el)) {
-            if (this.thinkTimer) clearInterval(this.thinkTimer);
-            this.thinkTimer = undefined;
-            return;
-          }
-          secs.textContent = `${Math.floor((Date.now() - this.thinkStart) / 1000)}s`;
-          // 前/后台文案实时切换（状态可能在长任务中变化）
-          const nowFg = this.session?.projection.status === 'running' || this.session?.projection.status === 'waiting';
-          const text = nowFg ? this.t('thinking') : this.t('bgTask');
-          if (label.textContent !== text) label.textContent = text;
-        }, 1000);
-      }
-    } else {
-      thinking?.remove();
-      if (this.thinkTimer) {
-        clearInterval(this.thinkTimer);
-        this.thinkTimer = undefined;
-      }
-    }
   }
 
   // ═══════════════ 头部 / 状态 / 浮层 ═══════════════

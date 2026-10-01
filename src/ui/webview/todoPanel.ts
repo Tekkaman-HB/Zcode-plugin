@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 消费 ./render 的 h()/isTodoWrite()、./events 的 MutableSessionMessage、./i18n 的 Translate
- * [OUTPUT]: 对外提供 extractLatestTodos()（消息集 → 最近 TodoWrite 推导，含任务身份 callId）与 renderTodoPanel()（进程面板渲染：点击头行立即重建；全部完成时头行渲染关闭按钮，onClose(callId) 上报）与 TodoPanelInfo/TodoPanelItem 形状
- * [POS]: webview 的进程面板层——消息流与 composer 之间的常驻任务进展（对标桌面端"进程"状态面板）；不持有状态，chat.ts 在消息集变化时调用
+ * [OUTPUT]: 对外提供 extractLatestTodos()（消息集 → 最近 TodoWrite 推导，含任务身份 callId）、renderTodoPanel()（进程面板渲染：点击头行立即重建；全部完成时头行渲染关闭按钮，onClose(callId) 上报）与关闭记忆持久化 loadClosedTodoCallIds/saveClosedTodoCallIds 及 TodoPanelInfo/TodoPanelItem 形状
+ * [POS]: webview 的进程面板层——消息流与 composer 之间的常驻任务进展（对标桌面端"进程"状态面板）；不持有渲染状态，chat.ts 在消息集变化时调用；关闭记忆经 localStorage 持久化（跨会话切换/webview 重载保留）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { h, isTodoWrite } from './render';
@@ -49,23 +49,45 @@ export function extractLatestTodos(messages: Map<string, MutableSessionMessage>)
   return null;
 }
 
+/** 关闭记忆的 localStorage 键与容量上限（插入序保留最新 50 条，防无限增长） */
+const TODO_CLOSED_KEY = 'zcode.todoClosedCallIds';
+const TODO_CLOSED_CAP = 50;
+
+/** 读取关闭记忆（损坏/隐私模式降级为空集：面板照常显示，只是本次关闭不入库） */
+export function loadClosedTodoCallIds(): Set<string> {
+  try {
+    const arr = JSON.parse(localStorage.getItem(TODO_CLOSED_KEY) ?? '[]') as unknown;
+    return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** 写入关闭记忆（Set 插入序=时间序，截尾保留最新） */
+export function saveClosedTodoCallIds(ids: ReadonlySet<string>): void {
+  try {
+    localStorage.setItem(TODO_CLOSED_KEY, JSON.stringify([...ids].slice(-TODO_CLOSED_CAP)));
+  } catch { /* 配额满/隐私模式静默：关闭记忆退化为本次 webview 会话内 */ }
+}
+
 /**
  * 渲染进程面板（幂等重建；展开态从旧节点的 .open 类读取，重建间保留）。
  * 头行 = 状态点 + 标题 + 计数 + 当前任务（单行省略）+ [全部完成时的关闭按钮] + chevron；
  * 展开追加完整清单（复用 .todo-item 三态样式）。
- * 关闭语义：info.callId === closedCallId 时隐藏——仅同任务隐藏，新一轮 TodoWrite（新 callId）重现。
+ * 关闭语义：info.callId ∈ closedCallIds 时隐藏——仅被手动关过的任务隐藏（持久化，跨会话/重载），
+ * 新一轮 TodoWrite（新 callId）重现。
  */
 export function renderTodoPanel(
   el: HTMLElement,
   info: TodoPanelInfo | null,
-  closedCallId: string | null,
+  closedCallIds: ReadonlySet<string>,
   t: Translate,
   onClose: (callId: string) => void
 ): void {
   const wasOpen = el.classList.contains('open');
   el.innerHTML = '';
   el.classList.remove('open');
-  if (!info || !info.todos.length || info.callId === closedCallId) {
+  if (!info || !info.todos.length || closedCallIds.has(info.callId)) {
     el.classList.add('hidden');
     return;
   }
@@ -97,7 +119,7 @@ export function renderTodoPanel(
     // 翻转意图后立即重建：清单 DOM 只由 renderTodoPanel 落地——只 toggle class 不重建，
     // 点击会"看似无反应"（class 延迟到下次消息刷新才体现=自动打开/折叠不上的根因）
     el.classList.toggle('open');
-    renderTodoPanel(el, info, closedCallId, t, onClose);
+    renderTodoPanel(el, info, closedCallIds, t, onClose);
   });
   el.append(head);
 
