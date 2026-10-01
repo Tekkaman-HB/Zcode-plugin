@@ -13,11 +13,11 @@ export const MODE_ICONS: Record<string, string> = {
   yolo: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8.5 2 4 9h3.5L7 14l4.5-7H8l.5-5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>'
 };
 
-/** 官方 Z 标（对齐桌面端 icon 的斜切双段 Z） */
+/** 官方 Z 标（像素级对齐桌面端 icon.png：连续对角带 + 横杠两端斜切段，缝隙即底色） */
 export function zLogoEl(): HTMLElement {
   const span = document.createElement('span');
   span.className = 'icon-svg';
-  span.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="5.4" fill="transparent"/><g fill="#fff"><rect x="6.1" y="6.9" width="11.8" height="1.5"/><rect x="6.1" y="15.6" width="11.8" height="1.5"/><polygon points="16.4,8.4 17.8,8.4 7.5,15.6 6.1,15.6"/></g><polygon points="12.4,4.5 13.2,4.5 12,19.5 11.2,19.5" fill="#18181a"/></svg>';
+  span.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><g fill="#fff"><polygon points="17.8,6.9 13.3,6.9 6.0,17.0 10.5,17.0"/><polygon points="6.4,6.9 12.0,6.9 10.9,8.4 6.4,8.4"/><polygon points="12.9,15.6 17.5,15.6 17.5,17.0 11.8,17.0"/></g></svg>';
   return span;
 }
 

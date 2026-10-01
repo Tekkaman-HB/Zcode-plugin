@@ -217,6 +217,8 @@ export class ChatApp {
         const file = item.getAsFile();
         if (!file) continue;
         e.preventDefault();
+        // 空输入态（无附件且无落盘在途）从 图片1 重新计数；在途检查防快速连贴竞态重名
+        if (!this.attachments.length && !this.pastePending.size) this.pasteSeq = 0;
         this.pasteSeq++;
         const label = this.locale === 'zh-CN' ? `图片${this.pasteSeq}.png` : `Image${this.pasteSeq}.png`;
         const reader = new FileReader();
@@ -603,8 +605,6 @@ export class ChatApp {
           el = node;
         } else if (node) {
           this.insertMessageNode(node, id);
-          // 顺序校正：期望序 = messages 迭代序，错位时移动（罕见，仅会话重排时发生）
-          if (prev && node.previousElementSibling !== prev) prev.insertAdjacentElement('afterend', node);
           el = node;
         } else {
           el?.remove(); // 整条被过滤（system-reminder 等）→ 移除已有节点
@@ -612,7 +612,16 @@ export class ChatApp {
         }
       }
       this.rendered.set(id, snap);
-      if (el) prev = el; // 被过滤消息不入 DOM，链序保持在上一个可见节点
+      if (el) {
+        // 顺序校正（新旧节点统一）：期望序 = messages 迭代序。错位来源：
+        // 权威回显换 id 重渲染、会话重排残留——这里一律归位；首条消息不在流顶时前置
+        if (prev) {
+          if (el.previousElementSibling !== prev) prev.insertAdjacentElement('afterend', el);
+        } else if (el !== this.messagesEl.firstElementChild) {
+          this.messagesEl.prepend(el);
+        }
+        prev = el; // 被过滤消息不入 DOM，链序保持在上一个可见节点
+      }
     }
     for (const el of [...this.messagesEl.children]) {
       const id = (el as HTMLElement).dataset?.['messageId'];

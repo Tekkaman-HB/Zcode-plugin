@@ -220,11 +220,25 @@ export function applySessionEvent(host: EventHost, ev: SessionEvent): void {
     }
     case 'message.upserted': {
       const m = extractMessage(ev, p);
-      if (m) {
-        host.messages.set(m.id, m.msg);
-        host.dirty.add(m.id);
-        host.scheduleFlush();
+      if (!m) break;
+      // 乐观回显合并：optimistic-user 先行入场（local- id），权威回显若另立新 key 会把
+      // 用户消息追加到 Map 尾部——用户气泡被排到助手工具卡之后（时序错乱）。
+      // 同文本配对命中时原位吸收权威内容（key 不变保住 DOM 位置与节点），并防双份气泡
+      if (m.msg.info.role === 'user') {
+        const local = [...host.messages.entries()].find(([id, mm]) =>
+          id.startsWith('local-') && mm.info.role === 'user' && firstVisibleText(mm) === firstVisibleText(m.msg));
+        if (local) {
+          const [localId, entry] = local;
+          entry.info = { ...m.msg.info, messageId: localId };
+          entry.parts = m.msg.parts;
+          host.dirty.add(localId);
+          host.scheduleFlush();
+          break;
+        }
       }
+      host.messages.set(m.id, m.msg);
+      host.dirty.add(m.id);
+      host.scheduleFlush();
       break;
     }
     case 'message.removed': {
@@ -357,12 +371,24 @@ function findToolPart(host: EventHost, callId: string): MessagePart | null {
   return null;
 }
 
+/** 消息首个可见文本部件的内容（乐观消息与权威回显的同源配对依据） */
+function firstVisibleText(m: MutableSessionMessage): string {
+  for (const p of m.parts) {
+    if (p.type === 'text') {
+      const tp = p as unknown as { text?: string; ignored?: boolean };
+      if (!tp.ignored) return tp.text ?? '';
+    }
+  }
+  return '';
+}
+
 /** 消息事件 → 可变消息（messageId 兜底 + parts 归一化） */
 function extractMessage(ev: SessionEvent, payload?: Record<string, unknown>): { id: string; msg: MutableSessionMessage } | null {
   const anyEv = ev as unknown as Record<string, unknown>;
   const source = (payload ?? {}) as Record<string, unknown>;
   const hasParts = source.parts != null || anyEv.parts != null;
-  const raw = (source.message ?? anyEv.message ?? hasParts ? { ...source } : anyEv) as Record<string, unknown>;
+  // ?? 优先级高于 ?:——先取嵌套 message，再按有无 parts 兜底到信封根级（缺括号会把嵌套形状整条解析成 null）
+  const raw = ((source.message ?? anyEv.message) ?? (hasParts ? { ...source } : anyEv)) as Record<string, unknown>;
   const info = (raw.info ?? (raw.role ? { role: raw.role } : null)) as { role?: string; messageId?: string; [k: string]: unknown } | null;
   const content = raw.content;
   const parts = (raw.parts ?? (typeof content === 'string' ? [{ type: 'text', text: content }] : null)) as MessagePart[] | null;
