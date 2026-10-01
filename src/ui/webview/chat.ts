@@ -17,7 +17,7 @@ import type { InteractionDraft } from './interaction';
 import { makeT, type Locale, type Translate } from './i18n';
 import { zLogoEl, modeIconEl, atIconEl, gearIconEl, plusIconEl, clockIconEl } from './icons';
 import { formatTokens, fmtContext } from './format';
-import { applySessionEvent, type ChatSessionState, type MutableSessionMessage } from './events';
+import { applySessionEvent, normalizeMessageId, type ChatSessionState, type MutableSessionMessage } from './events';
 import { renderPermissionCards } from './queue';
 import { MenuController } from './menus';
 import { extractLatestTodos, renderTodoPanel as renderTodoPanelDom } from './todoPanel';
@@ -282,7 +282,7 @@ export class ChatApp {
         };
         this.messages.clear();
         for (const m of d.messages ?? []) {
-          const id = String(m.info?.messageId ?? `m-${this.messages.size}`);
+          const id = normalizeMessageId(m as MutableSessionMessage) || `m-${this.messages.size}`;
           this.messages.set(id, m as MutableSessionMessage);
         }
         this.pendingPermissions.clear();
@@ -423,7 +423,7 @@ export class ChatApp {
         // 权威消息列表校准（回合结束后/工具完成时拉取）
         this.messages.clear();
         for (const m of msg.data.messages ?? []) {
-          const id = String(m.info?.messageId ?? `m-${this.messages.size}`);
+          const id = normalizeMessageId(m as MutableSessionMessage) || `m-${this.messages.size}`;
           // 服务端部件无 partId、callId 写作 callID——归一化（折叠记忆/增量更新依赖 partId）
           (m as MutableSessionMessage).parts = (m.parts ?? []).map((pp, i) => ({
             ...pp,

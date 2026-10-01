@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../../protocol/types、../bridge 的 FromWebviewMessage、./interaction 的 InteractionDraft、./i18n 的 Translate
- * [OUTPUT]: 对外提供 ChatSessionState/MutableSessionMessage 状态形状、EventHost 接口、applySessionEvent()（session/event → 状态机）与 extractMessage/extractToolResultText 适配工具
+ * [OUTPUT]: 对外提供 ChatSessionState/MutableSessionMessage 状态形状、EventHost 接口、applySessionEvent()（session/event → 状态机）与 extractMessage/normalizeMessageId/extractToolResultText 适配工具
  * [POS]: webview 的协议事件适配层——宽容解析事件信封并驱动宿主状态；chat.ts 的 onSessionEvent 委托至此
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -379,6 +379,19 @@ function extractMessage(ev: SessionEvent, payload?: Record<string, unknown>): { 
     id,
     msg: { info: { ...(info ?? {}), role, messageId: id }, parts: normalizedParts }
   };
+}
+
+/**
+ * 服务端消息 id 方言归一：resume 载荷用 info.messageId，session/messages 载荷用 info.id
+ * （同一会话两种形状，探针实证逐条同值）。原地回填 messageId 后返回；
+ * 缺失时返回空串，由调用方退化索引 id。
+ */
+export function normalizeMessageId(m: MutableSessionMessage): string {
+  const info = m.info ?? { role: '' };
+  m.info = info;
+  const legacy = (info as { id?: unknown }).id;
+  if (!info.messageId && typeof legacy === 'string' && legacy) info.messageId = legacy;
+  return info.messageId ?? '';
 }
 
 /** 工具结果对象 → 展示文本（宽容尝试多种字段） */

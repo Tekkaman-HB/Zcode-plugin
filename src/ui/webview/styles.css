@@ -437,7 +437,13 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
   transition: background-color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
 }
 .todo-dot-completed { background: var(--green); color: #fff; }
-.todo-dot-running { border: 1.5px solid var(--accent); color: transparent; animation: records-pulse 1.4s var(--ease-in-out) infinite; }
+/* 进行中 = 旋转弧线 spinner（淡轨道+亮弧旋转）：与 pending 静态灰圈形状划清界限，一眼可辨 */
+.todo-dot-running {
+  border: 1.5px solid color-mix(in oklch, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
+  color: transparent;
+  animation: spin 0.9s linear infinite;
+}
 .todo-dot-pending { border: 1.5px solid var(--line-strong); color: transparent; }
 .todo-text { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
 .todo-completed .todo-text { color: var(--ink-3); }

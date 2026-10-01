@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./i18n
- * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite()/isSystemReminderText() 工具与 renderMessage（可返回 null=整条被过滤）/renderPart 部件渲染器（AskUserQuestion 问答摘要卡、TodoWrite 任务清单卡——默认折叠；system-reminder 元文本整段过滤，不渲染空壳）
+ * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite()/isSystemReminderText() 工具与 renderMessage（可返回 null=整条被过滤）/renderPart 部件渲染器（AskUserQuestion 问答摘要卡、TodoWrite 任务清单卡——默认折叠；system-reminder 元文本与 info.visibility=model-only 的服务端注入（todo 提醒/后台任务，无标签裸文本）整段过滤，不渲染空壳）
  * [POS]: webview 的渲染层——纯函数式 DOM 构建，chat.ts 持有状态并调用；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -275,6 +275,9 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
   const el = h('div', { class: `msg msg-${role}`, 'data-message-id': String(msg.info?.messageId ?? '') });
 
   if (role === 'user') {
+    // 服务端 model-only 注入（todo 提醒/后台任务等）：只给模型看，整条不渲染——
+    // 这类提醒不带 <system-reminder> 标签（resume/messages 两方言均带 info.visibility，探针实证），文本过滤兜不住
+    if ((msg.info as { visibility?: unknown } | undefined)?.visibility === 'model-only') return null;
     const el2 = h('div', { class: 'msg-user-block' });
     for (const p of msg.parts) {
       if (p.type === 'text') {
