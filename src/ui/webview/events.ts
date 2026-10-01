@@ -74,7 +74,10 @@ export function applySessionEvent(host: EventHost, ev: SessionEvent): void {
       } else if (kind === 'reasoning_delta' && delta) {
         appendToStreamPart(host, mid, partId || `reasoning-${mid}`, 'reasoning', delta);
       } else if (kind === 'text_start' || kind === 'reasoning_start' || kind === 'start') {
+        // 思考开始的瞬间就要有占位动效：只建消息不触发渲染的话，占位要等第一个 delta 才出现
         ensureMessage(host, mid, 'assistant');
+        host.dirty.add(mid);
+        host.scheduleFlush();
       }
       break;
     }

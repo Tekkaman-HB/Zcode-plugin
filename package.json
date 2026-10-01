@@ -2,7 +2,7 @@
   "name": "zcode-vscode",
   "displayName": "Zcode plan tool",
   "description": "ZCode for VSCode — Z.ai 智能编程助手，复用桌面端账户认证，对接 ZCode CLI 协议",
-  "version": "0.5.7",
+  "version": "0.5.11",
   "publisher": "huangbing",
   "license": "MIT",
   "private": true,

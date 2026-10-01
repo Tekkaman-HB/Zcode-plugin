@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./format 的 normalizeToolOutputText、./i18n
- * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite()/isSystemReminderText() 工具与 renderMessage（可返回 null=整条被过滤）/renderPart 部件渲染器（AskUserQuestion 问答摘要卡、TodoWrite 任务清单卡——默认折叠；思考中占位带像素网格加载器 + shimmer 文字 + 动态秒表（原常驻 thinking-cursor 特效并入，messageId 锚点跨重建续秒，节点脱离 DOM 自清 interval=输出到达即停）；system-reminder 元文本与 info.visibility=model-only 的服务端注入（todo 提醒/后台任务，无标签裸文本）整段过滤，不渲染空壳）
+ * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./format 的 normalizeToolOutputText、./i18n；流式活性由 chat.ts 经 renderMessage opts.live 传入（尾部件继承）
+ * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite()/isSystemReminderText() 工具与 renderMessage（可返回 null=整条被过滤）/renderPart 部件渲染器（AskUserQuestion 问答摘要卡、TodoWrite 任务清单卡——默认折叠；思考中占位与流式推理摘要共用像素网格+shimmer+秒表动效（锚点跨重建续秒，节点脱离 DOM 自清 interval=输出到达即停），推理块落档后定格"思考过程"；system-reminder 元文本与 info.visibility=model-only 的服务端注入（todo 提醒/后台任务，无标签裸文本）整段过滤，不渲染空壳）
  * [POS]: webview 的渲染层——纯函数式 DOM 构建，chat.ts 持有状态并调用；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -113,8 +113,34 @@ export function resetToolCollapseState(): void {
   thinkingStarts.clear();
 }
 
-/** 思考计时锚点（messageId → 起始时刻）：占位节点重建不重置秒表；输出到达=占位移除=锚点清理 */
+/** 思考计时锚点（key → 起始时刻）：占位/推理块节点重建不重置秒表；节点脱离 DOM=锚点清理 */
 const thinkingStarts = new Map<string, number>();
+
+/** 像素网格加载器（对标 Beautiful UI Loading State）：3×3 圆点错峰点亮 */
+function pixelGrid(): HTMLElement {
+  const grid = h('span', { class: 'think-pixel' });
+  for (let i = 0; i < 9; i++) grid.append(h('span', { class: 'think-px', style: `animation-delay:${(i % 3) * 140 + Math.floor(i / 3) * 90}ms` }));
+  return grid;
+}
+
+/** 自清生命周期秒表 span：每秒自增，节点脱离 DOM 即停表并清理锚点（思考占位与流式推理摘要共用） */
+function elapsedSecsSpan(key: string): HTMLElement {
+  let start = thinkingStarts.get(key);
+  if (start === undefined) {
+    start = Date.now();
+    thinkingStarts.set(key, start);
+  }
+  const el = h('span', { class: 'think-secs' }, `${Math.floor((Date.now() - start) / 1000)}s`);
+  const timer = setInterval(() => {
+    if (!el.isConnected) {
+      clearInterval(timer);
+      thinkingStarts.delete(key);
+      return;
+    }
+    el.textContent = `${Math.floor((Date.now() - start) / 1000)}s`;
+  }, 1000);
+  return el;
+}
 
 /**
  * 思考中占位（像素网格加载器 + shimmer 文字 + 动态秒表——原常驻 thinking-cursor 的同款特效，
@@ -122,26 +148,13 @@ const thinkingStarts = new Map<string, number>();
  * 内容到达后占位节点被移除，计时随之停止；下一段思考（新消息）从 0s 重新计
  */
 function thinkingPlaceholder(messageId: string, t: Translate): HTMLElement {
-  const key = messageId || `anon-${thinkingStarts.size}`;
-  let start = thinkingStarts.get(key);
-  if (start === undefined) {
-    start = Date.now();
-    thinkingStarts.set(key, start);
-  }
-  // 像素网格加载器（对标 Beautiful UI Loading State）：3×3 圆点错峰点亮
-  const grid = h('span', { class: 'think-pixel' });
-  for (let i = 0; i < 9; i++) grid.append(h('span', { class: 'think-px', style: `animation-delay:${(i % 3) * 140 + Math.floor(i / 3) * 90}ms` }));
-  const secs = h('span', { class: 'think-secs' }, '0s');
-  const box = h('div', { class: 'msg-thinking' }, grid, h('span', { class: 'think-label' }, t('thinking')), secs);
-  const timer = setInterval(() => {
-    if (!box.isConnected) {
-      clearInterval(timer);
-      thinkingStarts.delete(key);
-      return;
-    }
-    secs.textContent = `${Math.floor((Date.now() - start) / 1000)}s`;
-  }, 1000);
-  return box;
+  const secs = elapsedSecsSpan(messageId || `anon-${thinkingStarts.size}`);
+  return h('div', { class: 'msg-thinking' }, pixelGrid(), h('span', { class: 'think-label' }, t('thinking')), secs);
+}
+
+/** 流式推理摘要（同款动效，锚点按 partId 跨重建续秒）：仅用于正在流式消息的尾部推理部件 */
+function liveReasoningSummary(partId: string, t: Translate): HTMLElement {
+  return h('summary', { class: 'reasoning-live' }, pixelGrid(), h('span', { class: 'think-label' }, t('thinking')), elapsedSecsSpan(`reasoning:${partId}`));
 }
 
 export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
@@ -304,7 +317,7 @@ function summarizeInput(input: Record<string, unknown>): string {
 
 // ═══════════════ 消息 ═══════════════
 
-export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: (name: string, url?: string, isImg?: boolean) => void): HTMLElement | null {
+export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: (name: string, url?: string, isImg?: boolean) => void, opts?: { live?: boolean }): HTMLElement | null {
   const role = msg.info?.role ?? 'assistant';
   const el = h('div', { class: `msg msg-${role}`, 'data-message-id': String(msg.info?.messageId ?? '') });
 
@@ -344,10 +357,10 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
     return el;
   }
 
-  // assistant / system：按部件顺序渲染
+  // assistant / system：按部件顺序渲染；尾部件继承消息的流式活性（推理块据此切换动态/存档摘要）
   let hasContent = false;
-  for (const p of msg.parts) {
-    const node = renderPart(p, t);
+  for (let i = 0; i < msg.parts.length; i++) {
+    const node = renderPart(msg.parts[i], t, Boolean(opts?.live) && i === msg.parts.length - 1);
     if (node) {
       el.append(node);
       hasContent = true;
@@ -362,7 +375,7 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
   return el;
 }
 
-export function renderPart(p: MessagePart, t: Translate): HTMLElement | null {
+export function renderPart(p: MessagePart, t: Translate, tailLive = false): HTMLElement | null {
   // UnknownPart 带 string 索引签名，联合不可判别；按 case 显式收窄
   switch (p.type) {
     case 'text': {
@@ -373,8 +386,14 @@ export function renderPart(p: MessagePart, t: Translate): HTMLElement | null {
     case 'reasoning': {
       const rp = p as unknown as ReasoningPart;
       if (!rp.text) return null;
+      // 流式消息的尾部推理部件=正在思考 → 动态摘要（像素网格+思考中+秒表）；
+      // 后面出现输出部件或消息已落档 → 定格为"✻ 思考过程 ▸"存档态。
+      // 摘要必须是 <summary> 元素：details 首子元素非 summary 时浏览器会渲染默认"详情"
+      const summary = tailLive
+        ? liveReasoningSummary(rp.partId ?? '', t)
+        : h('summary', {}, `✻ ${t('thoughtProcess')}`, h('span', { class: 'reasoning-chevron' }, '▸'));
       return h('details', { class: 'reasoning', 'data-part-id': rp.partId },
-        h('summary', {}, `✻ ${t('thoughtProcess')}`),
+        summary,
         h('div', { class: 'md reasoning-body' }, htmlNode(renderMarkdown(rp.text)))
       );
     }

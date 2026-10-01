@@ -534,7 +534,7 @@ export class ChatApp {
           this.rendered.set(id, this.snapshotOf(m)); // 增量路径内容已变，快照同步防下次 rebuild 误判重建
           continue; // 增量路径：只改文本节点，零重建
         }
-        const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg));
+        const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg), { live: streaming && id === this.currentAssistantId });
         if (node && existing) {
           node.classList.add('replaced');
           existing.replaceWith(node);
@@ -611,7 +611,7 @@ export class ChatApp {
       }
       const skipStreaming = streaming && id === this.currentAssistantId && el !== null;
       if (!skipStreaming && (!el || this.rendered.get(id) !== snap)) {
-        const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg));
+        const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg), { live: streaming && id === this.currentAssistantId });
         if (node && el) {
           node.classList.add('replaced'); // 替换场景抑制入场动画（.msg:last-child 会重播 fade-up）
           el.replaceWith(node);

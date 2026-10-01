@@ -350,9 +350,15 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .reasoning > summary {
   list-style: none; cursor: pointer; font-size: 12px; font-weight: 500; color: var(--ink-3);
   padding: 3px 0; transition: color 100ms var(--ease-out);
+  display: flex; align-items: center; gap: 5px;
 }
 .reasoning > summary:hover { color: var(--ink-2); }
 .reasoning > summary::marker { content: none; }
+/* 展开箭头：随 details 开合旋转，亮度继承摘要文字 */
+.reasoning .reasoning-chevron { display: inline-block; transition: transform var(--dur) var(--ease-out); }
+.reasoning[open] .reasoning-chevron { transform: rotate(90deg); }
+/* 流式推理摘要：像素网格 + 思考中 + 秒表（与思考占位同款动效），落定后换回静态"思考过程" */
+.reasoning > summary.reasoning-live { gap: 9px; }
 .reasoning-body { font-size: 12.5px; color: var(--ink-2); line-height: 1.6; margin: 4px 0 6px; padding-left: 10px; border-left: 2px solid var(--line); }
 .compaction-note, .timeline-note, .step-marker { font-size: 11.5px; color: var(--ink-3); text-align: center; padding: 3px 0; }
 .compaction-note { color: var(--ink-3); background: var(--inset); border-radius: var(--radius-chip); padding: 3px 10px; display: inline-block; }
@@ -693,11 +699,10 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .composer-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-top: 4px; }
 .composer-bar-left, .composer-bar-right { display: flex; align-items: center; gap: 3px; min-width: 0; }
 .composer-chip {
-  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px;
-  border-radius: 999px; border: none; cursor: pointer;
-  background: var(--surface); color: var(--ink-2); font-size: 12px; font-weight: 500;
-  box-shadow: var(--shadow-btn);
-  transition: background-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out);
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px;
+  border-radius: var(--radius-control); border: none; cursor: pointer;
+  background: transparent; color: var(--ink-3); font-size: 12px; font-weight: 500;
+  transition: background-color 100ms var(--ease-out), color 100ms var(--ease-out), transform var(--dur) var(--ease-out);
   max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .composer-chip:hover { background: var(--hover); color: var(--ink); }
@@ -825,7 +830,8 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 /* MCP / 账户菜单 */
 /* MCP 状态灯：连接=绿灯 / 失败=红灯（淡色外环，Beautiful UI 状态点风格） */
 /* inline 元素上 width/height 无效——必须 inline-block，否则退化为行高竖条 */
-.mcp-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; vertical-align: middle; margin-right: 7px; }
+/* 左缘 3px：光晕环向左溢出 2px，label 的 overflow:hidden（省略号）会把它裁掉——留位防削边 */
+.mcp-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; vertical-align: middle; margin: 0 7px 0 3px; }
 .mcp-dot.ok {
   background: var(--green);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 22%, transparent);
