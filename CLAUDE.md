@@ -10,7 +10,7 @@ src/protocol/ - ZCode app-server 协议层：NDJSON JSON-RPC 客户端与全部�
 src/ui/ - 视图宿主：聊天视图的 WebviewViewProvider（会话历史内嵌于聊天头部时钟按钮）
 src/ui/webview/ - webview 前端：应用壳(chat.ts) + 事件适配(events) + 交互队列(queue) + 菜单(menus) + 渲染/交互卡/图标/格式化/i18n/markdown
 scripts/ - 冒烟测试（协议回归，`npm run smoke`）、UI 验收（`npm run ui-preview`：服务+开浏览器，四主题/三栏对比/`?theme=` 深链）与视觉级联回归（`npm run theme-check`：CSS 块序 + computed tokens 四主题互异 + dark+hc 并存 HC 胜出 + 字体子集懒加载 + 深链 + CSP 'unsafe-inline' 看守，无浏览器时降级静态断言；preview-server.mjs 为共享静态服务；ui-live.html 真实产物驱动页支持 `?csp=strict|fixed` 复现 webview CSP 环境）
-media/ - 图标资源（zcode.svg=官方 Z 标复刻的侧栏图标；zcode-sessions.svg 备用；fonts/=Inter 可变字重五子集 latin/latin-ext/cyrillic/cyrillic-ext/greek）
+media/ - 图标资源（zcode-icon.png=欢迎页官方原图（桌面端 icon.png 原样拷贝，body[data-logo] 注入 webview）；zcode.svg=官方 Z 标复刻的侧栏图标；icon.png=市场 128px；zcode-sessions.svg 备用；fonts/=Inter 可变字重五子集 latin/latin-ext/cyrillic/cyrillic-ext/greek）
 out/ - 构建产物（esbuild 双 target + styles.css + fonts/，git 忽略）
 docs/ - 项目知识库（AI 友好 Docs 标准：00-context~99-archive 十一目录；AI 工作规范入口见 AGENTS.md，与 GEB 代码地图并存——docs:check/ai:check 守护）
 scripts/docs/ - 文档校验闸门脚本（check.sh 结构校验 / ai-check.sh AI 行为合同 / new-adr.sh ADR 建号）
@@ -40,6 +40,7 @@ LICENSE - MIT
 - **消息 id 双方言（probe-resume 实证，0.5.x 历史会话重复渲染根因）**：同一会话的消息，`session/resume` 响应 info 用 `messageId`，`session/messages` 返回 DB 方言 `info.id`（parts 同理 `messageID`，值逐条相同、键名不同）。webview 消息入 map 前必须经 events.ts:normalizeMessageId 原地归一（回填 messageId）——只归 partId/callID 不归消息 id 时，renderMessage 的 data-message-id 渲染为空串，rebuild 的查找/清理都命中不了这些"幽灵节点"，resume 快照（真 id）与权威刷新（索引 id 兜底）两套节点互删不掉，每点一次历史会话就整会话叠加一份渲染
 - **model-only 注入消息（探针实证，0.5.x 提醒裸奔根因）**：服务端会向会话注入 `role:user` 的合成消息（`synthetic:true` + `info.visibility:'model-only'`，如 todo_reminder 提醒、background_task）——只给模型看，且**不带 `<system-reminder>` 标签**（文本过滤兜不住），resume/messages 两方言均携带 visibility 字段；UI 侧按 `visibility==='model-only'` 整条过滤（render.ts user 分支），勿按 source 值枚举或英文文案匹配
 - **MCP 名称真相源是 `process/childProcesses`**（返回 {pid, serverName, mcpSource, pluginName}；遥测 mcpId 的 custom 段是每进程 HMAC 盐哈希无法反查名称）。`mcp/list` 只反映 workspace 池——对会话池恒报 disconnected，禁用其做 UI 状态；协议不暴露 MCP 工具名
+- **MCP 工具结果可能是拍扁的内容块 JSON（0.5.2 排障实证）**：非标准 MCP server（如 zai-mcp-server 返回 `{<tool>_result_summary:[{text}]}` 无 content 键）的结果，CLI 序列化后换行逃逸成字面 `\n`，`state.output`/`p.result` 层面拿到的都是拍平串（可带 `label:`/`**label:**` 前缀）。UI 侧双点修复：events.ts extractToolResultText 内容块感知提取（块数组→真实换行多行文本，兜底 pretty JSON 勿 compact stringify）+ render.ts 渲染前 normalizeToolOutputText 还原（format.ts 共享纯函数）
 - **用量统计已整体移除（0.5.x 用户裁决）**：齿轮菜单不展示用量行，`usage/stats` 拉取管线（fetchUsage/scheduleUsageRefresh/桥接 usage 消息/UsageRange·UsageStatsResult 类型）全链删除——勿因"桌面端有"而回加；如未来需要，重走 usage/stats + 独立 UI 载体
 - **model patch 陷阱**：`state.updated` 的 `patch.model.available` 只含当前选中模型、contextWindow 是降级值（200K）——settings.model.available 必须以 create/resume 响应（配置权威：完整列表+真实窗口如 1M）为准，patch 只取 current/lastUsed，新增模型按 ref 去重追加
 - **stderr 是噪声**：CLI 会向 stderr 写 dotenvx 提示/Built-in 刷新日志等诊断——严禁参与 UI 状态机（曾导致启动横幅常驻 + 会话被误清）；服务状态只由进程生命周期（spawn/exit）与推送结果驱动

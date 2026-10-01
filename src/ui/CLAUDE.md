@@ -4,7 +4,7 @@
 ## 成员清单
 
 bridge.ts: 扩展↔webview 消息契约（ToWebviewMessage/FromWebviewMessage），两端共同消费，不含运行时代码
-chatProvider.ts: 聊天视图宿主（WebviewViewProvider），HTML/CSP 生成（style-src 'unsafe-inline' 必需——CSP 静默剥离 setAttribute 的 style 属性，详见 L1"CSP 剥 style 属性"条目）、桥接消息分发到 SessionController
+chatProvider.ts: 聊天视图宿主（WebviewViewProvider），HTML/CSP 生成（style-src 'unsafe-inline' 必需——CSP 静默剥离 setAttribute 的 style 属性，详见 L1"CSP 剥 style 属性"条目；body[data-logo] 注入官方原图 URI——webview 禁 import vscode，asWebviewUri 只能宿主完成）、桥接消息分发到 SessionController
 
 ## 子目录
 

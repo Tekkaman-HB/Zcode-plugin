@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 消费 ../../protocol/types、../bridge 的 FromWebviewMessage、./interaction 的 InteractionDraft、./i18n 的 Translate
- * [OUTPUT]: 对外提供 ChatSessionState/MutableSessionMessage 状态形状、EventHost 接口、applySessionEvent()（session/event → 状态机）与 extractMessage/normalizeMessageId/extractToolResultText 适配工具
+ * [INPUT]: 消费 ../../protocol/types、../bridge 的 FromWebviewMessage、./interaction 的 InteractionDraft、./i18n 的 Translate、./format 的 extractContentTexts
+ * [OUTPUT]: 对外提供 ChatSessionState/MutableSessionMessage 状态形状、EventHost 接口、applySessionEvent()（session/event → 状态机）与 extractMessage/normalizeMessageId/extractToolResultText 适配工具（后者内容块感知：MCP 块数组还原多行文本，兜底 pretty JSON）
  * [POS]: webview 的协议事件适配层——宽容解析事件信封并驱动宿主状态；chat.ts 的 onSessionEvent 委托至此
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -17,6 +17,7 @@ import type {
 import type { FromWebviewMessage } from '../bridge';
 import type { InteractionDraft } from './interaction';
 import type { Translate } from './i18n';
+import { extractContentTexts } from './format';
 
 /** ChatApp 持有的会话状态形状（chat.ts / menus.ts / events.ts 共享） */
 export type ChatSessionState = {
@@ -420,15 +421,18 @@ export function normalizeMessageId(m: MutableSessionMessage): string {
   return info.messageId ?? '';
 }
 
-/** 工具结果对象 → 展示文本（宽容尝试多种字段） */
+/** 工具结果对象 → 展示文本（宽容尝试多种字段；内容块数组还原多行文本，兜底 pretty JSON 保结构） */
 function extractToolResultText(result: Record<string, unknown> | undefined): string | null {
   if (!result || typeof result !== 'object') return null;
   for (const k of ['output', 'content', 'summary', 'text', 'display', 'stdout']) {
     const v = result[k];
     if (typeof v === 'string' && v) return v;
   }
+  // MCP 内容块（标准 content 键或 zai 式单键块数组）：提取真实换行的文本，勿整体 stringify 拍扁
+  const texts = extractContentTexts(result);
+  if (texts) return texts.join('\n\n');
   try {
-    return JSON.stringify(result);
+    return JSON.stringify(result, null, 2);
   } catch {
     return null;
   }

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 无依赖（Locale 为类型导入）
- * [OUTPUT]: 对外提供 formatTokens/fmtContext/sourceLabel/sourceColor/formatTokensLocale/fmtContextLocale 展示格式化工具
- * [POS]: webview 的数字与标签格式化层，chat.ts（上下文圆环）与 menus.ts（上下文菜单）消费
+ * [OUTPUT]: 对外提供 formatTokens/fmtContext/sourceLabel/sourceColor/formatTokensLocale/fmtContextLocale 展示格式化工具与 extractContentTexts/normalizeToolOutputText 工具输出规整
+ * [POS]: webview 的数字、标签与工具输出文本规整层，chat.ts（上下文圆环）、menus.ts（上下文菜单）、events.ts（工具结果提取）与 render.ts（工具卡输出渲染）消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { Locale } from './i18n';
@@ -70,4 +70,49 @@ export function sourceColor(src: string): string {
     system_prompt: 'var(--ink-3)'
   };
   return MAP[src] ?? 'var(--ink-3)';
+}
+
+// ═══════════════ 工具输出规整 ═══════════════
+
+/** 内容块数组 → 文本数组（MCP 标准 [{type:'text',text}] 与 zai 变体 [{text}] 通吃；无文本块返回 null） */
+function blockTexts(arr: unknown): string[] | null {
+  if (!Array.isArray(arr) || !arr.length) return null;
+  const texts: string[] = [];
+  for (const b of arr) {
+    if (b && typeof b === 'object' && typeof (b as { text?: unknown }).text === 'string') {
+      const t = (b as { text: string }).text;
+      if (t) texts.push(t);
+    }
+  }
+  return texts.length ? texts : null;
+}
+
+/**
+ * 结果对象 → 内容块文本（events 工具结果提取与 render 输出规整共用）：
+ * 顶层数组直接按块数组读；对象要求全部值都是块数组才视为内容（防误伤普通 JSON 结果对象）。
+ */
+export function extractContentTexts(value: unknown): string[] | null {
+  if (Array.isArray(value)) return blockTexts(value);
+  if (!value || typeof value !== 'object') return null;
+  const texts: string[] = [];
+  for (const v of Object.values(value)) {
+    const t = blockTexts(v);
+    if (!t) return null;
+    texts.push(...t);
+  }
+  return texts.length ? texts : null;
+}
+
+/**
+ * 工具输出串规整：CLI/兜底序列化拍平的内容块 JSON（含 `label: [...]` / `**label:** [...]` 前缀变体，
+ * 换行已逃逸成字面 \n）→ 还原为真实换行的多行文本；非该形状原样返回。
+ */
+export function normalizeToolOutputText(output: string): string {
+  const candidate = output.replace(/^\s*(?:\*\*)?[\w.]{1,80}(?:\*\*)?\s*[:：]\s*/, '').trim();
+  if (!candidate.startsWith('[') && !candidate.startsWith('{')) return output;
+  try {
+    const texts = extractContentTexts(JSON.parse(candidate));
+    if (texts) return texts.join('\n\n');
+  } catch { /* 非 JSON 或解析失败：原样 */ }
+  return output;
 }

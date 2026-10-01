@@ -791,7 +791,7 @@ export class ChatApp {
     if (this.messages.size === 0) {
       const idx = this.locale === 'zh-CN' ? 'zh' : 'en';
       this.overlayEl.append(h('div', { class: 'gate subtle' },
-        h('div', { class: 'gate-logo small', style: 'background:#18181a' }, zLogoEl()),
+        zLogoEl(),
         h('div', { class: 'gate-title' }, this.t('emptyTitle')),
         h('div', { class: 'gate-hint' }, this.serverState === 'starting' ? this.t('starting') : this.t('emptyHint')),
         h('div', { class: 'gate-suggestions' },

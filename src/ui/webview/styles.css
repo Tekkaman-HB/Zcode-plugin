@@ -267,8 +267,13 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
   display: flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: 22px; color: var(--accent);
 }
-.gate-logo.small { width: 40px; height: 40px; border-radius: var(--radius-card); font-size: 0; }
-.gate-logo.small svg { width: 20px; height: 20px; }
+/* 欢迎页官方 Z 标：原图自带圆角与透明边距，直接铺满展示（.z-logo-fallback 为无 URI 时的 SVG 近似，保留深色底衬） */
+.z-logo { width: 40px; height: 40px; }
+.z-logo-fallback {
+  width: 40px; height: 40px; border-radius: var(--radius-card); background: #18181a;
+  display: flex; align-items: center; justify-content: center;
+}
+.z-logo-fallback svg { width: 20px; height: 20px; }
 .gate-title { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
 .gate-hint { font-size: 12.5px; color: var(--ink-2); max-width: 260px; text-align: center; line-height: 1.55; }
 .gate-btn {
@@ -303,6 +308,10 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 }
 .msg-assistant { color: var(--ink); }
 .msg-thinking { font-size: 12px; color: var(--ink-3); }
+/* 思考 spinner（盲文点阵帧）：inline-block 锁基线，帧间不晃动 */
+.thinking-spin { display: inline-block; }
+/* 思考秒表：等宽数字防跳动，弱于正文一档 */
+.thinking-elapsed { font-variant-numeric: tabular-nums; opacity: .75; }
 
 /* 流式原文模式 + 块状光标（caret-blink） */
 .raw { white-space: pre-wrap; word-break: break-word; }
@@ -711,6 +720,8 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 
 /* 附件行 / 排队行 */
 .attach-row, .queued-row { display: flex; flex-wrap: wrap; gap: 5px; }
+/* 有附件时：附件行与提示词输入区之间的水平分割线 */
+.attach-row:not(.hidden) { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 .attach-chip {
   display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 4px 0 8px;
   border-radius: 999px; background: var(--surface); box-shadow: var(--shadow-hairline);

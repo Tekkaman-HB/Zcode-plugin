@@ -272,7 +272,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <link rel="stylesheet" href="${styles}">
 <title>ZCode</title>
 </head>
-<body>
+<!-- data-logo 注入官方原图 URI（media/zcode-icon.png）：webview 层禁 import vscode，
+     asWebviewUri 只能宿主完成，icons.ts zLogoEl 从这里取 src -->
+<body data-logo="${asset('media/zcode-icon.png')}">
 <div id="app"></div>
 <script nonce="${nonce}" src="${script}"></script>
 </body>

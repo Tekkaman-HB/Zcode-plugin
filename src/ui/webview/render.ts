@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./i18n
- * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite()/isSystemReminderText() 工具与 renderMessage（可返回 null=整条被过滤）/renderPart 部件渲染器（AskUserQuestion 问答摘要卡、TodoWrite 任务清单卡——默认折叠；system-reminder 元文本与 info.visibility=model-only 的服务端注入（todo 提醒/后台任务，无标签裸文本）整段过滤，不渲染空壳）
+ * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./format 的 normalizeToolOutputText、./i18n
+ * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite()/isSystemReminderText() 工具与 renderMessage（可返回 null=整条被过滤）/renderPart 部件渲染器（AskUserQuestion 问答摘要卡、TodoWrite 任务清单卡——默认折叠；思考中占位带桌面端同款盲文 spinner + 动态秒表（messageId 锚点跨重建续秒，节点脱离 DOM 自清 interval=输出到达即停）；system-reminder 元文本与 info.visibility=model-only 的服务端注入（todo 提醒/后台任务，无标签裸文本）整段过滤，不渲染空壳）
  * [POS]: webview 的渲染层——纯函数式 DOM 构建，chat.ts 持有状态并调用；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -15,6 +15,7 @@ import type {
   TimelinePart
 } from '../../protocol/types';
 import { renderMarkdown } from './markdown';
+import { normalizeToolOutputText } from './format';
 import type { Translate } from './i18n';
 
 // ═══════════════ DOM 工具 ═══════════════
@@ -105,10 +106,51 @@ const userCollapsed = new Set<string>();
 /** 用户手动展开的 partId 集合：TodoWrite 卡默认折叠（清单已由进程面板常驻展示，消息流卡仅留审计），展开选择同样跨重渲染保留 */
 const userExpanded = new Set<string>();
 
-/** 会话切换时清空折叠/展开记忆 */
+/** 会话切换时清空折叠/展开记忆与思考计时锚点 */
 export function resetToolCollapseState(): void {
   userCollapsed.clear();
   userExpanded.clear();
+  thinkingStarts.clear();
+}
+
+/** 思考计时锚点（messageId → 起始时刻）：占位节点重建不重置秒表；输出到达=占位移除=锚点清理 */
+const thinkingStarts = new Map<string, number>();
+
+/** 盲文点阵 spinner 帧序列（对标桌面端思考动效） */
+const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+
+/**
+ * 思考中占位（盲文 spinner + 思考中… + 动态秒表，对标桌面端）：100ms 一帧转 spinner，
+ * 秒数每跳一次更新；interval 以 isConnected 自判生命周期——内容到达后占位节点被移除，
+ * 动效与计时随之停止；下一段思考（新消息）从 0s 重新计
+ */
+function thinkingPlaceholder(messageId: string, t: Translate): HTMLElement {
+  const key = messageId || `anon-${thinkingStarts.size}`;
+  let start = thinkingStarts.get(key);
+  if (start === undefined) {
+    start = Date.now();
+    thinkingStarts.set(key, start);
+  }
+  const spin = h('span', { class: 'thinking-spin' }, SPINNER_FRAMES[0]);
+  const elapsed = h('span', { class: 'thinking-elapsed' }, '0s');
+  const box = h('div', { class: 'msg-thinking' }, spin, ` ${t('thinking')} `, elapsed);
+  let frame = 0;
+  let lastSec = 0;
+  const timer = setInterval(() => {
+    if (!box.isConnected) {
+      clearInterval(timer);
+      thinkingStarts.delete(key);
+      return;
+    }
+    frame = (frame + 1) % SPINNER_FRAMES.length;
+    spin.textContent = SPINNER_FRAMES[frame];
+    const sec = Math.floor((Date.now() - start) / 1000);
+    if (sec !== lastSec) {
+      lastSec = sec;
+      elapsed.textContent = `${sec}s`;
+    }
+  }, 100);
+  return box;
 }
 
 export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
@@ -187,7 +229,8 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
     }
   }
   if (!isAskQ && !isTodo && status === 'completed' && st?.output) {
-    body.append(h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, t('toolOutput')), jsonBlock(st.output)));
+    // 权威刷新路径的 output 可能是 CLI 序列化拍平的内容块 JSON（换行逃逸成字面 \n）——渲染前还原
+    body.append(h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, t('toolOutput')), jsonBlock(normalizeToolOutputText(st.output))));
   }
   if (status === 'error' && st?.error) {
     body.append(h('div', { class: 'tool-card-section error' }, h('div', { class: 'tool-card-label' }, t('error')), jsonBlock(st.error)));
@@ -322,7 +365,7 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
   if (!hasContent) {
     // parts 为空 = 流式起步的空消息 → 保留"思考中"占位；
     // parts 非空但全部被过滤（system-reminder/ignored）→ 整条不渲染
-    if (msg.parts.length === 0) el.append(h('div', { class: 'msg-thinking' }, `✳ ${t('thinking')}`));
+    if (msg.parts.length === 0) el.append(thinkingPlaceholder(String(msg.info?.messageId ?? ''), t));
     else return null;
   }
   return el;

@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 无依赖（仅 DOM API）
+ * [INPUT]: 无依赖（仅 DOM API；官方原图 URI 由 chatProvider 生成的 body[data-logo] 注入）
  * [OUTPUT]: 对外提供 MODE_ICONS 图标表与 zLogoEl/modeIconEl/atIconEl/gearIconEl/plusIconEl/clockIconEl 图标元素工厂
- * [POS]: webview 的内联 SVG 图标层，chat.ts（chip/标题栏/欢迎页）与 menus.ts（模式菜单）消费
+ * [POS]: webview 图标层（官方原图 img + 内联 SVG），chat.ts（chip/标题栏/欢迎页）与 menus.ts（模式菜单）消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -13,10 +13,19 @@ export const MODE_ICONS: Record<string, string> = {
   yolo: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8.5 2 4 9h3.5L7 14l4.5-7H8l.5-5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>'
 };
 
-/** 官方 Z 标（像素级对齐桌面端 icon.png：连续对角带 + 横杠两端斜切段，缝隙即底色） */
+/** 官方 Z 标：优先 body[data-logo] 的官方原图（1024px icon.png，自带圆角与透明边距）；无注入 URI（裸 preview 等）兜底内联 SVG 近似 */
 export function zLogoEl(): HTMLElement {
+  const uri = document.body.dataset.logo;
+  if (uri) {
+    const img = document.createElement('img');
+    img.className = 'z-logo';
+    img.alt = 'ZCode';
+    img.draggable = false;
+    img.src = uri;
+    return img;
+  }
   const span = document.createElement('span');
-  span.className = 'icon-svg';
+  span.className = 'z-logo-fallback';
   span.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><g fill="#fff"><polygon points="17.8,6.9 13.3,6.9 6.0,17.0 10.5,17.0"/><polygon points="6.4,6.9 12.0,6.9 10.9,8.4 6.4,8.4"/><polygon points="12.9,15.6 17.5,15.6 17.5,17.0 11.8,17.0"/></g></svg>';
   return span;
 }
