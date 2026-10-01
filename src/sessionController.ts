@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约
- * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI）
+ * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）
  * [POS]: 会话控制层——extension.ts 与 UI Provider 之间的业务中枢
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -329,14 +329,14 @@ export class SessionController {
     }
   }
 
-  /** 回合结束后合并出队（800ms 去抖，等投影落定） */
+  /** 回合结束后合并出队（默认 800ms 去抖，等投影落定；插队路径传短延时快发） */
   private queueDrainTimer: NodeJS.Timeout | undefined;
-  private scheduleQueueDrain(): void {
+  private scheduleQueueDrain(delayMs = 800): void {
     if (this.queueDrainTimer) clearTimeout(this.queueDrainTimer);
     this.queueDrainTimer = setTimeout(() => {
       this.queueDrainTimer = undefined;
       void this.drainQueue();
-    }, 800);
+    }, delayMs);
     this.queueDrainTimer.unref?.();
   }
 
@@ -362,7 +362,7 @@ export class SessionController {
 
   /**
    * 立即发送（插队）：中止当前回合 → 把目标条提到队首（其余保留）→ 等中止落定后发出。
-   * turn.failed/completed 事件会触发 drainQueue（800ms 去抖），此处只负责 stop + 重排。
+   * turn.failed/completed 事件会触发 drainQueue（800ms 去抖）兜底，此处只负责 stop + 重排 + 快发。
    */
   async prioritizeQueueItem(id: string): Promise<void> {
     const idx = this.pendingQueue.findIndex((q) => q.id === id);
@@ -373,6 +373,9 @@ export class SessionController {
     // 打断当前回合；turn.failed 事件 → busy=false → scheduleQueueDrain 自动发出队首（即该条）
     if (this.isBusy()) {
       await this.stop();
+      // 用户显式插队：只留一个短对齐窗口等中止尾事件落定——800ms 去抖在此是可感知的顿挫；
+      // 尾事件未到（busy 仍真）时 drainQueue 空转，仍由 turn.failed 路径兜底
+      this.scheduleQueueDrain(100);
     } else {
       this.scheduleQueueDrain();
     }

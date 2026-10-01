@@ -24,6 +24,10 @@ npm run docs:check   # 文档结构校验
 npm run ai:check     # AI 行为合同校验
 ```
 
+## 交付节奏（用户裁决的固定流程）
+
+每次功能/修复完成并验证后：升 package.json 版本号（patch +1）→ `npm run package` → `"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension <vsix 路径>` → 提示用户在 VSCode 里 Reload Window（重载会杀掉扩展宿主即当前对话本体，AI 绝不可用脚本代按，只能提示用户手动点）。
+
 ## Constraints
 
 硬约束全文见 docs/00-context/硬约束.md。要点：

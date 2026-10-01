@@ -738,6 +738,8 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
   background: var(--surface); box-shadow: var(--shadow-hairline); font-size: 12px; color: var(--ink-2);
   animation: fade-up 180ms var(--ease-out);
 }
+/* 排队条 diff 渲染：已展示过的条目重排/出队时不重播入场动画（防闪烁） */
+.queued-item.queued-item-kept { animation: none; }
 .queued-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queued-actions { display: flex; gap: 4px; flex: none; }
 .queued-btn { height: 22px; padding: 0 9px; font-size: 11px; border-radius: 999px; }

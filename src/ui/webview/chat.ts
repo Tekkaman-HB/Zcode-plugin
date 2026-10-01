@@ -813,18 +813,30 @@ export class ChatApp {
 
   // ═══════════════ 附件与 @ 引用 ═══════════════
 
-  /** 排队管理器：每条显示全文 + 立即发送（插队）+ 删除 */
+  /** 排队管理器：每条显示全文 + 立即发送（插队）+ 删除。
+   *  指纹跳过 + 旧条目免动画：全量重建会重放 fade-up 入场动画——插队/出连推两次更新时整行反复闪烁 */
+  private queueSig = '';
+  private queueSeenIds = new Set<string>();
+
   private renderQueued(): void {
-    this.queuedEl.innerHTML = '';
     if (this.queuedCount <= 0 || !this.queuedItems.length) {
       this.queuedCount = 0;
       this.queuedItems = [];
+      this.queueSig = '';
+      this.queueSeenIds.clear();
+      this.queuedEl.innerHTML = '';
       this.queuedEl.classList.add('hidden');
       return;
     }
+    const sig = `${this.queuedCount}\u0000${this.queuedItems.map((q) => `${q.id}\u0000${q.content}`).join('\u0001')}`;
+    if (sig === this.queueSig) return; // 内容未变：连发的 queued-update 不重建不闪
+    const prevIds = this.queueSeenIds;
+    this.queueSeenIds = new Set(this.queuedItems.map((q) => q.id));
+    this.queueSig = sig;
     this.queuedEl.classList.remove('hidden');
+    this.queuedEl.innerHTML = '';
     for (const q of this.queuedItems) {
-      this.queuedEl.append(h('div', { class: 'queued-item' },
+      this.queuedEl.append(h('div', { class: `queued-item${prevIds.has(q.id) ? ' queued-item-kept' : ''}` },
         h('div', { class: 'queued-text', title: q.content }, q.content),
         h('div', { class: 'queued-actions' },
           h('button', {
