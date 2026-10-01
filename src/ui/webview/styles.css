@@ -436,7 +436,8 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
   font-size: 9.5px; font-weight: 700; line-height: 1;
   transition: background-color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
 }
-.todo-dot-completed { background: var(--green); color: #fff; }
+/* 完成态 = 描边绿圈绿勾（透明底，对标桌面端 todo 卡），与 pending 灰圈以颜色+勾区分 */
+.todo-dot-completed { background: transparent; border: 1.5px solid var(--green); color: var(--green); }
 /* 进行中 = 旋转弧线 spinner（淡轨道+亮弧旋转）：与 pending 静态灰圈形状划清界限，一眼可辨 */
 .todo-dot-running {
   border: 1.5px solid color-mix(in oklch, var(--accent) 28%, transparent);
@@ -446,7 +447,12 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 }
 .todo-dot-pending { border: 1.5px solid var(--line-strong); color: transparent; }
 .todo-text { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
-.todo-completed .todo-text { color: var(--ink-3); }
+/* 完成态：删除线 + 暗淡（对标桌面端 todo 卡） */
+.todo-completed .todo-text {
+  color: var(--ink-3);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--ink-3) 55%, transparent);
+}
 
 /* ═══════════ 进程面板（常驻任务进展，对标桌面端"进程"状态面板） ═══════════ */
 .todo-panel {
@@ -455,6 +461,8 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
   animation: fade-up 220ms var(--ease-out);
 }
 .todo-panel-head { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; user-select: none; }
+/* 展开态：清单在上、把手行在下，分隔线隔开（对标桌面端 todo 卡） */
+.todo-panel.open .todo-panel-head { border-top: 1px solid var(--line-soft); margin-top: 5px; padding-top: 7px; }
 .todo-panel-title { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink-2); }
 .todo-panel-count { flex: none; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .todo-panel-current { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink); }

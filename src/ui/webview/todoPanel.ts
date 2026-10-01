@@ -102,6 +102,7 @@ export function renderTodoPanel(
   el.append(head);
 
   if (wasOpen) {
+    // 对标桌面端 todo 卡：清单在上、把手行在下（CSS 用 .open 给 head 加分隔线）
     el.classList.add('open');
     const list = h('div', { class: 'todo-panel-list' });
     for (const td of todos) {
@@ -110,6 +111,6 @@ export function renderTodoPanel(
         h('span', { class: `todo-dot todo-dot-${st}` }, st === 'completed' ? '✓' : ''),
         h('span', { class: 'todo-text' }, td.content)));
     }
-    el.append(list);
+    el.insertBefore(list, head);
   }
 }
