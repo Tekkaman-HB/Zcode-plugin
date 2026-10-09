@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约
- * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）
+ * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）
  * [POS]: 会话控制层——extension.ts 与 UI Provider 之间的业务中枢
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -22,6 +22,8 @@ import type { ToWebviewMessage, SessionSnapshotPayload } from './ui/bridge';
 
 export interface SessionControllerCallbacks {
   toWebview: (msg: ToWebviewMessage) => void;
+  /** 有效模式落定上报（新建/恢复/用户切换/CLI 侧改模式）→ 宿主据此持久化"最近使用模式" */
+  onModeChange?: (mode: SessionMode) => void;
 }
 
 export class SessionController {
@@ -135,6 +137,7 @@ export class SessionController {
       if (st) {
         if (st.sessionId && this.currentSessionId && st.sessionId !== this.currentSessionId) return;
         const patch = st.patch ?? {};
+        if (patch.mode) this.cbs.onModeChange?.(patch.mode);
         this.cbs.toWebview({ kind: 'state-updated', data: { patch, revision: st.revision, reason: st.reason } });
       }
     }
@@ -216,6 +219,7 @@ export class SessionController {
       ...(model ? { model } : {})
     });
     this.currentSessionId = result.session.sessionId;
+    this.cbs.onModeChange?.(result.session.mode);
     this.dropPendingInteractions();
     this.mcpStarted = 0;
     this.mcpServerIds = [];
@@ -260,6 +264,7 @@ export class SessionController {
       workspace: undefined
     });
     this.currentSessionId = sessionId;
+    this.cbs.onModeChange?.(result.session.mode);
     this.dropPendingInteractions();
     this.mcpStarted = 0;
     this.mcpServerIds = [];
@@ -404,6 +409,7 @@ export class SessionController {
       sessionId: this.currentSessionId,
       mode
     });
+    this.cbs.onModeChange?.(mode);
   }
 
   /** 回合结束后拉取权威消息列表，校准流式渲染 */

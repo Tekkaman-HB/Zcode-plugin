@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 vscode，消费 ./environment / ./account / ./serverManager / ./sessionController / ./ui/* / ./i18n
  * [OUTPUT]: 对外提供 activate / deactivate（插件生命周期入口）
- * [POS]: 激活中枢——装配环境探测、服务守护、会话控制与聊天侧栏视图
+ * [POS]: 激活中枢——装配环境探测、服务守护、会话控制与聊天侧栏视图；globalState 持久化最近使用模式（新窗口/新会话延续）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import * as vscode from 'vscode';
@@ -13,6 +13,11 @@ import type { ToWebviewMessage } from './ui/bridge';
 import { detectLocale, makeT, type Locale, type StringKey } from './i18n';
 import type { SessionMode } from './protocol/types';
 import { spawn } from 'node:child_process';
+
+// ═══════════════ 最近使用模式（globalState 跨窗口延续） ═══════════════
+const LAST_MODE_KEY = 'zcode.lastMode';
+/** 可选模式集合 = 配置 enum；'auto' 为 CLI 内部态（菜单不可选），不持久化 */
+const PICKABLE_MODES: ReadonlySet<string> = new Set(['plan', 'build', 'edit', 'yolo']);
 
 export function activate(context: vscode.ExtensionContext): void {
   const locale = detectLocale();
@@ -27,6 +32,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // ── 工作区（v1 取第一个文件夹） ──
   const workspacePath = (): string => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
+  /** 新会话初始模式：显式配置 zcode.defaultMode 优先；否则延续最近一次使用的模式；否则 build */
+  function initialMode(): SessionMode {
+    const insp = cfg().inspect<SessionMode>('defaultMode');
+    const configured = insp?.globalValue ?? insp?.workspaceValue ?? insp?.workspaceFolderValue;
+    if (configured && PICKABLE_MODES.has(configured)) return configured;
+    const last = context.globalState.get<string>(LAST_MODE_KEY);
+    return last && PICKABLE_MODES.has(last) ? (last as SessionMode) : 'build';
+  }
+
   // ── 服务与会话控制（按工作区路径懒建，文件夹切换时重建） ──
   let server: ZcodeServer | null = null;
   let controller: SessionController | null = null;
@@ -38,7 +52,7 @@ export function activate(context: vscode.ExtensionContext): void {
     server: () => server,
     controller: () => controller,
     workspacePath,
-    defaultMode: () => cfg().get<SessionMode>('defaultMode') ?? 'build',
+    defaultMode: initialMode,
     onWebviewReady: () => void prepareSession(),
     onLogin: () => startLogin(t, locale),
     onLogout: () => void runLogout(t),
@@ -67,7 +81,10 @@ export function activate(context: vscode.ExtensionContext): void {
       onAccountStatus: (status) => chatProvider.setAccount(status)
     });
     const ctl = new SessionController(srv, {
-      toWebview: (msg: ToWebviewMessage) => chatProvider.post(msg)
+      toWebview: (msg: ToWebviewMessage) => chatProvider.post(msg),
+      onModeChange: (mode) => {
+        if (PICKABLE_MODES.has(mode)) void context.globalState.update(LAST_MODE_KEY, mode);
+      }
     });
     server = srv;
     controller = ctl;
@@ -104,7 +121,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     if (!core.ctl.sessionId) {
-      await core.ctl.newSession(workspacePath(), cfg().get<SessionMode>('defaultMode') ?? 'build').catch(() => {
+      await core.ctl.newSession(workspacePath(), initialMode()).catch(() => {
         /* 创建失败不打断 UI，首条消息时会重试 */
       });
     }
@@ -173,7 +190,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('zcode.newSession', async () => {
       const srv = await ensureStarted();
       if (!srv) return;
-      await controller?.newSession(workspacePath(), cfg().get<SessionMode>('defaultMode') ?? 'build');
+      await controller?.newSession(workspacePath(), initialMode());
     }),
     vscode.commands.registerCommand('zcode.stop', () => void controller?.stop()),
     vscode.commands.registerCommand('zcode.login', () => startLogin(t, locale)),
