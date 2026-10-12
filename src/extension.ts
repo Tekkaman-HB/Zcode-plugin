@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 vscode，消费 ./environment / ./account / ./serverManager / ./sessionController / ./ui/* / ./i18n
+ * [INPUT]: 依赖 vscode，消费 ./environment / ./account / ./serverManager / ./sessionController / ./ui/* / ./i18n / ./quotaUsage
  * [OUTPUT]: 对外提供 activate / deactivate（插件生命周期入口）
  * [POS]: 激活中枢——装配环境探测、服务守护、会话控制与聊天侧栏视图；globalState 持久化最近使用模式（新窗口/新会话延续）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -11,6 +11,7 @@ import { SessionController } from './sessionController';
 import { ChatViewProvider, type ChatViewHost } from './ui/chatProvider';
 import type { ToWebviewMessage } from './ui/bridge';
 import { detectLocale, makeT, type Locale, type StringKey } from './i18n';
+import { QuotaMonitor } from './quotaUsage';
 import type { SessionMode } from './protocol/types';
 import { spawn } from 'node:child_process';
 
@@ -53,11 +54,21 @@ export function activate(context: vscode.ExtensionContext): void {
     controller: () => controller,
     workspacePath,
     defaultMode: initialMode,
-    onWebviewReady: () => void prepareSession(),
+    onWebviewReady: () => {
+      quotaMonitor.refreshNow(); // webview（重）挂载即推缓存+后台刷新，圆环不空窗
+      void prepareSession();
+    },
     onLogin: () => startLogin(t, locale),
     onLogout: () => void runLogout(t),
     onOpenDesktop: () => openDesktopApp(t)
   } satisfies ChatViewHost);
+
+  // ── 套餐用量轮询（5 小时/每周圆环数据源；失败静默保留旧值，绝不打断主流程） ──
+  const quotaMonitor = new QuotaMonitor(
+    () => env.credentialsPath,
+    (data) => chatProvider.post({ kind: 'quota-usage', data })
+  );
+  quotaMonitor.start();
 
   function ensureCore(): { srv: ZcodeServer; ctl: SessionController } | null {
     const ws = workspacePath();
@@ -181,6 +192,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // ── 注册 ──
   context.subscriptions.push(
+    quotaMonitor,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatProvider, { webviewOptions: { retainContextWhenHidden: true } }),
 
     vscode.commands.registerCommand('zcode.sidebar.open', async () => {

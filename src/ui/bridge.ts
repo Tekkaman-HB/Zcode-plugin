@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无运行时依赖，消费 ../protocol/types 的协议类型
- * [OUTPUT]: 对外提供 ToWebviewMessage / FromWebviewMessage（扩展↔webview 消息契约）
+ * [OUTPUT]: 对外提供 ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload（扩展↔webview 消息契约与载荷类型）
  * [POS]: ui 的桥接类型层，extension 侧与 webview 侧共同消费，保证两端契约同构
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -74,6 +74,18 @@ export interface SessionsListPayload {
   }[];
 }
 
+/** 套餐用量单窗口（quota/limit 通道，见 src/quotaUsage.ts） */
+export interface QuotaWindowUsage {
+  percent: number;
+  resetAt: number | null;
+}
+
+export interface QuotaUsagePayload {
+  fiveHour: QuotaWindowUsage | null;
+  weekly: QuotaWindowUsage | null;
+  level: string | null;
+}
+
 export type ToWebviewMessage =
   | { kind: 'bootstrap'; data: BootstrapPayload }
   | { kind: 'server-state'; state: ServerState; detail?: string }
@@ -90,6 +102,7 @@ export type ToWebviewMessage =
   | { kind: 'queued-update'; data: { queued: number; items?: { id: string; content: string }[] } }
   | { kind: 'optimistic-user'; data: OptimisticUser }
   | { kind: 'mcp-servers'; data: { running: boolean; servers: { name: string; pid: number; source: string }[] } }
+  | { kind: 'quota-usage'; data: QuotaUsagePayload | null }
   | { kind: 'attachments-picked'; data: { attachments: AttachmentRef[] } }
   | { kind: 'files-list'; data: { dir: string; entries: DirEntry[] } }
   | { kind: 'show-preview'; data: { name: string; mime: string; dataUrl: string } }

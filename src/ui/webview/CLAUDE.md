@@ -12,6 +12,7 @@ render.ts: 纯函数 DOM 渲染层——h()/esc()/jsonBlock()/diffBlock()/isAskU
 todoPanel.ts: 进程面板层——extractLatestTodos()（消息集反向扫描 → 最近 TodoWrite 推导，callId 为任务身份；推导式不持状态）+ renderTodoPanel()（消息流与 composer 间常驻条：**展开态清单在上、把手行在下**（.todo-panel.open 给 head 加分隔线，对标桌面端 todo 卡）；把手=状态点+计数+当前任务/完成文案+关闭按钮+chevron，点击头行立即重建；**全部完成时头行渲染关闭按钮**，chat.ts 按 todoClosedCallIds 集合记忆关闭——localStorage 持久化（loadClosedTodoCallIds/saveClosedTodoCallIds，容量 50），跨会话切换/webview 重载保留、仅被关任务隐藏、新一轮 TodoWrite（新 callId）自动重现；无清单/已关闭隐藏）
 interaction.ts: 交互卡渲染层——权限卡（选项语义排序/分类/键盘导航（含 Esc 拒绝）/多题翻页向导+已答圆点/拒绝反馈行/bash 放行前缀/subagent 来源徽章）+ 用户输入卡（单题向导/自定义回答行/选项 preview/应答组装 answers 键=问题文本）；两向导共用 buildPagerBar 翻页条；两通道共享 InteractionDraft 草稿
 permPreview.ts: 工具身份分流与权限预览子层（resolveToolFamily：edit·write·execute·search·skill·mcp·switchMode·files；previewBody 对应渲染；displayReason 滤协议诊断文案；originBadge）
+quotaRings.ts: 套餐额度层——createQuotaRings() 双 16px SVG 圆环（5 小时/每周用量，视觉与 ctx-ring 同款 charts 色梯度），挂载 composer-bar-right 首位、ctx 环左侧；webview 零网络零状态，宿主 QuotaMonitor 经 quota-usage 消息驱动 update（数据缺失整组隐藏），悬停 title=套餐等级+已用百分比+重置倒计时（fmtIn 未来时紧凑文案）
 icons.ts: 图标层——官方 Z 标 zLogoEl（优先 body[data-logo] 注入的官方原图 media/zcode-icon.png，无 URI 兜底内联 SVG）+ MODE_ICONS 表（chip 与模式菜单共用）与 @/齿轮/+/时钟图标工厂
 format.ts: 展示格式化层——formatTokens/fmtContext（圆环与菜单）、sourceLabel（上下文来源标签，zh 对齐桌面端"消息/系统工具/技能…"）、sourceColor（来源→类别色，分段条与彩点同映射）、formatTokensLocale/fmtContextLocale（zh 万/亿计量，如"31.6万/100万"）、extractContentTexts/normalizeToolOutputText（MCP 内容块数组→多行文本；拍平的内容块 JSON（含 `label:`/`**label:**` 前缀、字面 \n 逃逸）渲染前还原——events 工具结果提取与 render 工具卡输出共用）
 markdown.ts: marked 封装，流式未闭合代码块补偿

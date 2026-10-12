@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单）、./todoPanel（进程面板渲染）、./icons、./format
+ * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单）、./todoPanel（进程面板渲染）、./quotaRings（套餐用量圆环）、./icons、./format
  * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 应用壳 + 桥接消息入口；EventHost/QueueHost/MenuHost 的宿主实现）；含 diff 式 rebuildMessages（快照复用节点 + 流式消息跳过，根治全量重建闪烁）
  * [POS]: webview 的中枢——持有全部共享状态，事件适配/交互队列/菜单/进程面板渲染委托给子模块；slash/@ 弹层因需改写输入框文本留在本层
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -21,6 +21,7 @@ import { applySessionEvent, normalizeMessageId, type ChatSessionState, type Muta
 import { renderPermissionCards } from './queue';
 import { MenuController } from './menus';
 import { extractLatestTodos, renderTodoPanel as renderTodoPanelDom, loadClosedTodoCallIds, saveClosedTodoCallIds } from './todoPanel';
+import { createQuotaRings } from './quotaRings';
 
 /** 模式 chip 短名（中文对齐桌面端语义） */
 const MODE_CHIP_LABEL: Record<string, string> = {
@@ -132,6 +133,8 @@ export class ChatApp {
   historyBtn!: HTMLButtonElement;
   gearBtn!: HTMLButtonElement;
   ctxRingBtn!: HTMLButtonElement;
+  /** 套餐用量双圆环（5 小时/每周）——数据由宿主 QuotaMonitor 经 quota-usage 消息推送 */
+  private readonly quotaRings = createQuotaRings();
   slashIndex = -1;
   attachments: AttachmentRef[] = [];
   atDir = '';
@@ -195,6 +198,7 @@ export class ChatApp {
           this.gearBtn = h('button', { class: 'bar-icon-btn', title: this.t('settings'), onclick: () => this.toggleSettingsMenu() }, gearIconEl())
         ),
         h('div', { class: 'composer-bar-right' },
+          this.quotaRings.el,
           this.ctxRingBtn = h('button', { class: 'ctx-ring-btn hidden', onclick: () => this.toggleContextMenu() }),
           this.modeBtn = h('button', { class: 'bar-icon-btn', onclick: () => this.toggleModeMenu() }, '…'),
           this.sendBtn = h('button', { class: 'send-btn', title: this.t('send'), onclick: () => this.onSend() }, '↑') as HTMLButtonElement
@@ -467,6 +471,9 @@ export class ChatApp {
         if (this.isOpenFor(this.ctxRingBtn)) this.toggleContextMenu(true);
         break;
       }
+      case 'quota-usage':
+        this.quotaRings.update(msg.data, this.t, this.locale);
+        break;
       case 'error':
         this.showError(msg.message);
         break;

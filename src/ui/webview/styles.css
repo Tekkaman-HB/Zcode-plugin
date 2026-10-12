@@ -717,6 +717,9 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .send-btn.stop { background: var(--red); }
 .send-btn:disabled { opacity: .45; pointer-events: none; }
 .ctx-ring-btn { width: 24px; height: 24px; padding: 0; }
+/* 套餐用量双圆环（5 小时/每周）：非交互，悬停 title 查看明细 */
+.quota-rings { display: flex; align-items: center; gap: 2px; margin-right: 2px; }
+.quota-ring { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
 
 /* 附件行 / 排队行 */
 .attach-row, .queued-row { display: flex; flex-wrap: wrap; gap: 5px; }

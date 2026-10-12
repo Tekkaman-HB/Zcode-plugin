@@ -97,7 +97,11 @@ const strings = {
     decline: '取消',
     continueBtn: '继续',
     prevQuestion: '上一题',
-    nextQuestion: '下一题'
+    nextQuestion: '下一题',
+    quotaFiveHour: '5 小时',
+    quotaWeekly: '每周',
+    quotaUsed: '已用 {pct}%',
+    quotaResetsIn: '{t}后重置'
   },
   'en-US': {
     appTitle: 'ZCode',
@@ -189,7 +193,11 @@ const strings = {
     decline: 'Dismiss',
     continueBtn: 'Continue',
     prevQuestion: 'Previous question',
-    nextQuestion: 'Next question'
+    nextQuestion: 'Next question',
+    quotaFiveHour: '5-hour',
+    quotaWeekly: 'Weekly',
+    quotaUsed: '{pct}% used',
+    quotaResetsIn: 'resets in {t}'
   }
 } as const;
 
