@@ -60,12 +60,15 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     onLogin: () => startLogin(t, locale),
     onLogout: () => void runLogout(t),
-    onOpenDesktop: () => openDesktopApp(t)
+    onOpenDesktop: () => openDesktopApp(t),
+    onRefreshQuota: () => quotaMonitor.refreshNow()
   } satisfies ChatViewHost);
 
-  // ── 套餐用量轮询（5 小时/每周圆环数据源；失败静默保留旧值，绝不打断主流程） ──
+  // ── 套餐用量轮询（5 小时/每周圆环数据源；provider 跟随当前会话模型——切换套餐
+  //    模型后额度换查新 key；失败静默保留旧值，绝不打断主流程） ──
   const quotaMonitor = new QuotaMonitor(
     () => env.credentialsPath,
+    () => controller?.currentModelProvider ?? undefined,
     (data) => chatProvider.post({ kind: 'quota-usage', data })
   );
   quotaMonitor.start();

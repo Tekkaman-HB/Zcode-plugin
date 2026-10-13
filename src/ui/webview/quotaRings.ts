@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 消费 ../bridge 的 QuotaUsagePayload、./render 的 h、./i18n 的 Translate
- * [OUTPUT]: 对外提供 createQuotaRings（输入工具栏的 5 小时/每周套餐用量双圆环）
- * [POS]: webview 的套餐额度层，chat.ts buildShell 挂载于 composer-bar-right 首位（ctx 环左侧），quota-usage 消息驱动 update
+ * [OUTPUT]: 对外提供 createQuotaRings（输入工具栏的 5 小时/每周套餐用量双圆环）、quotaRingSvg/fmtIn（弹层复用的环 SVG 与倒计时文案）
+ * [POS]: webview 的套餐额度层，chat.ts buildShell 挂载于 composer-bar-right 首位（ctx 环左侧），quota-usage 消息驱动 update；点击弹窗见 menus.ts toggleQuotaMenu
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
  * 视觉与 ctx-ring-btn 完全同款（16px 环 + 2.4 线宽 + charts 色梯度）；
@@ -12,13 +12,13 @@ import type { QuotaUsagePayload, QuotaWindowUsage } from '../bridge';
 import { h } from './render';
 import type { Translate } from './i18n';
 
-/** 单环 SVG：颜色随占用率绿→黄→橙（与 ctx-ring 同梯度），满环=100% */
-function ringSvg(pct: number): string {
+/** 单环 SVG：颜色随占用率绿→黄→橙（与 ctx-ring 同梯度），满环=100%；px 缩放 viewBox（弹层用大环） */
+export function quotaRingSvg(pct: number, px = 16): string {
   const r = 6.5;
   const c = 2 * Math.PI * r;
   const color = pct < 60 ? 'var(--vscode-charts-green)' : pct < 85 ? 'var(--vscode-charts-yellow)' : 'var(--vscode-charts-orange)';
   const clamped = Math.min(100, Math.max(0, pct));
-  return `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+  return `<svg width="${px}" height="${px}" viewBox="0 0 16 16" aria-hidden="true">
 <circle cx="8" cy="8" r="${r}" fill="none" stroke="var(--vscode-panel-border,rgba(128,128,128,.35))" stroke-width="2.4"/>
 <circle cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round"
  stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${(c * (1 - clamped / 100)).toFixed(2)}" transform="rotate(-90 8 8)"/>
@@ -26,7 +26,7 @@ function ringSvg(pct: number): string {
 }
 
 /** 距重置的剩余时长（未来时）→ 紧凑文案；不足 1 分钟归零 */
-function fmtIn(ms: number, locale: string): string {
+export function fmtIn(ms: number, locale: string): string {
   const total = Math.max(0, Math.floor(ms / 60_000));
   const d = Math.floor(total / 1440);
   const hh = Math.floor((total % 1440) / 60);
@@ -55,7 +55,7 @@ export function createQuotaRings(): QuotaRings {
       return;
     }
     span.classList.remove('hidden');
-    span.innerHTML = ringSvg(win.percent);
+    span.innerHTML = quotaRingSvg(win.percent);
     const parts = [`${prefix}${label} ${t('quotaUsed', { pct: String(Math.round(win.percent)) })}`];
     const remaining = (win.resetAt ?? 0) - Date.now();
     if (remaining > 0) parts.push(t('quotaResetsIn', { t: fmtIn(remaining, locale) }));

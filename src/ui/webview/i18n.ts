@@ -101,7 +101,8 @@ const strings = {
     quotaFiveHour: '5 小时',
     quotaWeekly: '每周',
     quotaUsed: '已用 {pct}%',
-    quotaResetsIn: '{t}后重置'
+    quotaResetsIn: '{t}后重置',
+    quotaPlanUsage: '套餐用量'
   },
   'en-US': {
     appTitle: 'ZCode',
@@ -197,7 +198,8 @@ const strings = {
     quotaFiveHour: '5-hour',
     quotaWeekly: 'Weekly',
     quotaUsed: '{pct}% used',
-    quotaResetsIn: 'resets in {t}'
+    quotaResetsIn: 'resets in {t}',
+    quotaPlanUsage: 'Plan usage'
   }
 } as const;
 

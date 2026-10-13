@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约
- * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）
+ * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）
  * [POS]: 会话控制层——extension.ts 与 UI Provider 之间的业务中枢
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -38,6 +38,8 @@ export class SessionController {
   private pendingPermissionReqs = new Map<string, PermissionRequestParams>();
   private pendingUserInputReqs = new Map<string, UserInputRequestParams>();
   private currentSessionId: string | null = null;
+  /** 当前会话所选模型的 providerId（create/resume 快照与 setModel 三路维护） */
+  private currentModelProviderId: string | null = null;
   private mcpStarted = 0;
   private mcpServerIds: string[] = [];
   private mcpCrashed: string[] = [];
@@ -84,6 +86,11 @@ export class SessionController {
 
   get sessionId(): string | null {
     return this.currentSessionId;
+  }
+
+  /** 当前会话模型的 provider（额度查询跟随其 key）：无会话/未选模型为 null */
+  get currentModelProvider(): string | null {
+    return this.currentModelProviderId;
   }
 
   /** 服务端通知解包：session/event + state.updated + MCP 遥测 转发 UI */
@@ -219,6 +226,7 @@ export class SessionController {
       ...(model ? { model } : {})
     });
     this.currentSessionId = result.session.sessionId;
+    this.currentModelProviderId = result.settings?.model?.current?.providerId ?? null;
     this.cbs.onModeChange?.(result.session.mode);
     this.dropPendingInteractions();
     this.mcpStarted = 0;
@@ -264,6 +272,7 @@ export class SessionController {
       workspace: undefined
     });
     this.currentSessionId = sessionId;
+    this.currentModelProviderId = result.settings?.model?.current?.providerId ?? null;
     this.cbs.onModeChange?.(result.session.mode);
     this.dropPendingInteractions();
     this.mcpStarted = 0;
@@ -401,6 +410,7 @@ export class SessionController {
       sessionId: this.currentSessionId,
       model: { providerId, modelId, ...(reasoningLevel ? { options: { reasoningLevel } } : {}) }
     });
+    this.currentModelProviderId = providerId;
   }
 
   async setMode(mode: SessionMode): Promise<void> {
@@ -433,6 +443,7 @@ export class SessionController {
 
   closeSessionUI(): void {
     this.currentSessionId = null;
+    this.currentModelProviderId = null;
     this.pendingQueue = [];
     this.dropPendingInteractions();
     this.cbs.toWebview({ kind: 'session-closed' });

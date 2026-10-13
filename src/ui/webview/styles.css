@@ -717,9 +717,14 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .send-btn.stop { background: var(--red); }
 .send-btn:disabled { opacity: .45; pointer-events: none; }
 .ctx-ring-btn { width: 24px; height: 24px; padding: 0; }
-/* 套餐用量双圆环（5 小时/每周）：非交互，悬停 title 查看明细 */
-.quota-rings { display: flex; align-items: center; gap: 2px; margin-right: 2px; }
+/* 套餐用量双圆环（5 小时/每周）：点击弹用量明细弹窗（悬停 title 兜底） */
+.quota-rings { display: flex; align-items: center; gap: 2px; margin-right: 2px; cursor: pointer; }
 .quota-ring { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
+/* 套餐用量弹层行（复用 ctx-row 行为，环替代彩点） */
+.quota-row-ring { flex: none; display: flex; align-items: center; }
+.quota-row-text { min-width: 0; }
+.quota-row-label { color: var(--ink-2); }
+.quota-row-sub { font-size: 11px; color: var(--ink-3); margin-top: 1px; }
 
 /* 附件行 / 排队行 */
 .attach-row, .queued-row { display: flex; flex-wrap: wrap; gap: 5px; }

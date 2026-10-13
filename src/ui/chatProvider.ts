@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 vscode，消费 ../sessionController、./bridge、../environment、../account
- * [OUTPUT]: 对外提供 ChatViewProvider（右侧栏聊天视图宿主）
+ * [OUTPUT]: 对外提供 ChatViewProvider（右侧栏聊天视图宿主）；send/set-model 桥接处理后经 onRefreshQuota 显式触发套餐用量刷新（新 key 的额度要跟上）
  * [POS]: ui 的聊天视图提供者，extension.ts 注册；与 webview/main.ts 通过 bridge 契约通信
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -37,6 +37,8 @@ export interface ChatViewHost {
   onLogin: () => void;
   onLogout: () => void;
   onOpenDesktop: () => void;
+  /** 显式触发套餐用量刷新（发送消息/切换模型后——新 key 的额度要跟上） */
+  onRefreshQuota: () => void;
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -106,6 +108,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             await controller.newSession(this.host.workspacePath(), this.host.defaultMode());
           }
           await controller.send(msg.content, msg.attachments);
+          this.host.onRefreshQuota();
           break;
         }
         case 'attach-pick': {
@@ -189,9 +192,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               modelId: msg.modelId,
               ...(msg.reasoningLevel ? { options: { reasoningLevel: msg.reasoningLevel } } : {})
             });
-            break;
+          } else {
+            await controller.setModel(msg.providerId, msg.modelId, msg.reasoningLevel);
           }
-          await controller.setModel(msg.providerId, msg.modelId, msg.reasoningLevel);
+          this.host.onRefreshQuota(); // 切模型（可能换 key）→ 立即刷新 key 的用量
           break;
         }
         case 'set-mode': {

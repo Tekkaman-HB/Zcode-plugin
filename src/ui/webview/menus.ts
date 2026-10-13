@@ -1,16 +1,17 @@
 /**
  * [INPUT]: 消费 ../bridge 的 FromWebviewMessage、../../protocol/types、./render 的 h()/relTime()、./icons 的 MODE_ICONS、./format、./events 的 ChatSessionState、./i18n
- * [OUTPUT]: 对外提供 MenuHost 接口与 MenuController（弹层菜单控制器：模型/上下文/齿轮/模式/历史会话菜单 + popup 定位设施与 composer 弹层按键导航）
+ * [OUTPUT]: 对外提供 MenuHost 接口与 MenuController（弹层菜单控制器：模型/上下文/套餐用量/齿轮/模式/历史会话菜单 + popup 定位设施与 composer 弹层按键导航）
  * [POS]: webview 的菜单层——popup 类菜单的唯一居所；chat.ts 构建并委托，斜杠/@ 弹层因需改写输入框文本留在 chat.ts（经 public showPopup 共用定位设施）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { AvailableModel } from '../../protocol/types';
-import type { FromWebviewMessage } from '../bridge';
+import type { FromWebviewMessage, QuotaUsagePayload } from '../bridge';
 import { h, relTime } from './render';
 import { MODE_ICONS } from './icons';
 import { formatTokens, fmtContext, sourceLabel, sourceColor, formatTokensLocale, fmtContextLocale } from './format';
 import type { ChatSessionState } from './events';
 import type { Locale, Translate } from './i18n';
+import { quotaRingSvg, fmtIn } from './quotaRings';
 
 /** 菜单层对宿主（ChatApp）的最小访问面 */
 export interface MenuHost {
@@ -26,6 +27,9 @@ export interface MenuHost {
   modeBtn: HTMLButtonElement;
   historyBtn: HTMLButtonElement;
   ctxRingBtn: HTMLElement;
+  quotaRingBtn: HTMLElement;
+  /** 最新套餐用量载荷（quota-usage 消息留存；null=无数据弹窗不开） */
+  quotaPayload: QuotaUsagePayload | null;
   composerInput: HTMLTextAreaElement;
   post(msg: FromWebviewMessage): void;
   optimisticSetModel(providerId: string, modelId: string, reasoningLevel?: string): void;
@@ -92,7 +96,7 @@ export class MenuController {
   onDocumentMousedown(target: HTMLElement): void {
     if (this.popupEl.contains(target)) return;
     // 触发按钮自身的点击由各自 toggle 处理（同按钮=关闭，异按钮=换菜单）
-    if (target.closest?.('.bar-icon-btn, .composer-chip, .titlebar-btn, .ctx-ring-btn')) return;
+    if (target.closest?.('.bar-icon-btn, .composer-chip, .titlebar-btn, .ctx-ring-btn, .quota-rings')) return;
     this.hidePopup();
   }
 
@@ -248,6 +252,46 @@ export class MenuController {
     }
     list.append(rows);
     this.showPopup(host.ctxRingBtn, list);
+  }
+
+  // ═══════════════ 套餐用量弹层（双环点击，对标上下文弹层） ═══════════════
+
+  /** 圆环点击：5 小时/每周套餐用量明细（大环 + 已用百分比 + 重置倒计时；数据缺失不开） */
+  toggleQuotaMenu(refresh = false): void {
+    const { host } = this;
+    if (!refresh && this.isOpenFor(host.quotaRingBtn)) {
+      this.hidePopup();
+      return;
+    }
+    if (!refresh) this.hidePopup();
+    const p = host.quotaPayload;
+    if (!p || (!p.fiveHour && !p.weekly)) return;
+    const list = h('div', { class: 'menu ctx-menu quota-menu' });
+    list.append(h('div', { class: 'ctx-head' },
+      h('span', { class: 'ctx-title' }, host.t('quotaPlanUsage')),
+      p.level ? h('span', { class: 'ctx-head-meta' }, p.level) : null
+    ));
+    const rows = h('div', { class: 'ctx-rows' });
+    const row = (win: { percent: number; resetAt: number | null } | null, labelKey: 'quotaFiveHour' | 'quotaWeekly'): void => {
+      if (!win) return;
+      const pct = Math.round(win.percent);
+      const ring = h('span', { class: 'quota-row-ring' });
+      ring.innerHTML = quotaRingSvg(pct, 22);
+      const remaining = (win.resetAt ?? 0) - Date.now();
+      rows.append(h('div', { class: 'ctx-row' },
+        ring,
+        h('div', { class: 'quota-row-text' },
+          h('div', { class: 'quota-row-label' }, host.t(labelKey)),
+          remaining > 0 ? h('div', { class: 'quota-row-sub' },
+            host.t('quotaResetsIn', { t: fmtIn(remaining, host.locale) })) : null
+        ),
+        h('span', { class: 'ctx-row-pct' }, `${pct}%`)
+      ));
+    };
+    row(p.fiveHour, 'quotaFiveHour');
+    row(p.weekly, 'quotaWeekly');
+    list.append(rows);
+    this.showPopup(host.quotaRingBtn, list);
   }
 
   // ═══════════════ 配置收纳（齿轮弹层，对标 Claude Code settings 菜单） ═══════════════

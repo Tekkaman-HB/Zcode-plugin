@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 node:fs 的凭据读取（经 ./credentials 间接）、全局 fetch/AbortSignal.timeout（Node 18+）
- * [OUTPUT]: 对外提供 QuotaWindowUsage/QuotaUsagePayload 类型、parseQuotaLimits（纯解析）、fetchCodingPlanQuota（单次拉取）、QuotaMonitor（轮询器）
- * [POS]: 根级套餐额度层——智谱 Coding Plan 5 小时/每周用量查询，extension.ts 装配轮询并经 chatProvider 推 webview 圆环
+ * [INPUT]: 依赖 ./credentials 的凭据解密与 providerId→apiKey 映射、全局 fetch/AbortSignal.timeout（Node 18+）
+ * [OUTPUT]: 对外提供 QuotaWindowUsage/QuotaUsagePayload 类型、parseQuotaLimits（纯解析）、fetchCodingPlanQuota（单次拉取，可指定 provider）、QuotaMonitor（轮询器，显式触发绕节流）
+ * [POS]: 根级套餐额度层——智谱 Coding Plan 5 小时/每周用量查询；extension.ts 装配轮询（provider 跟随当前会话模型）并经 chatProvider 推 webview 圆环；set-model/send 后 chatProvider 显式触发刷新
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
  * 接口契约（桌面端 app.asar + cc-switch 源码双向实证，2026-10）：
@@ -12,7 +12,7 @@
  * 注意：这是账户后端直连通道，与已移除的 usage/stats（CLI 协议 token 统计）无关，勿混淆。
  * 安全约束：api-key 只进请求头，严禁日志/遥测/错误消息。
  */
-import { decryptCredentials } from './credentials';
+import { decryptCredentials, getProviderApiKey } from './credentials';
 
 /** 单窗口用量：percent=已用百分比（0-100），resetAt=窗口重置毫秒时间戳 */
 export interface QuotaWindowUsage {
@@ -27,17 +27,21 @@ export interface QuotaUsagePayload {
   level: string | null;
 }
 
-/** 凭据表 → { 主机, api-key }。主机跟随桌面端 active provider；key 多把时 individual 优先、team 最后 */
-function resolveTarget(values: Map<string, string | null>): { host: string; apiKey: string } | null {
+/** 凭据表 → 主机（跟随桌面端 active provider） */
+function resolveHost(values: Map<string, string | null>): string {
   const active = (values.get('oauth:active_provider') ?? '').trim();
-  const host = active === 'zai' ? 'https://api.z.ai' : 'https://open.bigmodel.cn';
+  return active === 'zai' ? 'https://api.z.ai' : 'https://open.bigmodel.cn';
+}
+
+/** 未指定 provider 时的兜底 key：多把时 individual 优先、team 最后 */
+function pickKeyByRank(values: Map<string, string | null>): string | null {
   let best: { rank: number; key: string } | null = null;
   for (const [name, value] of values) {
     if (!value || !name.startsWith('account-provider:coding-plan:account:') || !name.endsWith(':api-key')) continue;
     const rank = name.includes('-individual-') ? 0 : name.includes('-team-') ? 2 : 1;
     if (!best || rank < best.rank) best = { rank, key: value };
   }
-  return best ? { host, apiKey: best.key } : null;
+  return best ? best.key : null;
 }
 
 /**
@@ -78,18 +82,27 @@ export function parseQuotaLimits(data: unknown): QuotaUsagePayload {
 }
 
 /**
- * 单次拉取套餐用量。null = 无凭据/非 coding-plan（webview 据此隐藏圆环）；
- * throw = 网络/服务失败（调用方保留旧值静默处理）。
+ * 单次拉取套餐用量。
+ * preferredProviderId = 当前会话模型的 provider（形如 account:bigmodel-individual-coding-plan）：
+ * 指定时用它的 key 查（切套餐模型后圆环跟随新 key）；该 provider 无 coding-plan key（API key
+ * 模板等非套餐模型）→ 返 null 隐藏圆环。未指定 → rank 兜底（individual 优先）。
+ * null = 无凭据/非套餐；throw = 网络/服务失败（调用方保留旧值静默处理）。
  */
-export async function fetchCodingPlanQuota(credentialsPath: string): Promise<QuotaUsagePayload | null> {
+export async function fetchCodingPlanQuota(credentialsPath: string, preferredProviderId?: string): Promise<QuotaUsagePayload | null> {
   const creds = decryptCredentials(credentialsPath);
   if (!creds) return null;
-  const target = resolveTarget(creds.values);
-  if (!target) return null;
-  const res = await fetch(`${target.host}/api/monitor/usage/quota/limit`, {
+  let apiKey: string | null = null;
+  if (preferredProviderId) {
+    apiKey = getProviderApiKey(creds, preferredProviderId);
+    if (!apiKey) return null; // 指定了 provider 但无对应套餐 key：非套餐模型，不展示
+  } else {
+    apiKey = pickKeyByRank(creds.values);
+    if (!apiKey) return null;
+  }
+  const res = await fetch(`${resolveHost(creds.values)}/api/monitor/usage/quota/limit`, {
     headers: {
       // 裸 key：智谱额度接口特有约定（cc-switch 实证），加 Bearer 前缀反而 401
-      Authorization: target.apiKey,
+      Authorization: apiKey,
       'Content-Type': 'application/json',
       'Accept-Language': 'en-US,en'
     },
@@ -104,17 +117,21 @@ export async function fetchCodingPlanQuota(credentialsPath: string): Promise<Quo
 // ═══════════════ 轮询器 ═══════════════
 
 const REFRESH_MS = 5 * 60_000;
-/** 两次真实网络拉取的最小间隔（refreshNow 高频触发时防打爆） */
+/** 定时轮询的最小真实拉取间隔（refreshNow 高频触发时防打爆；显式触发不受限） */
 const MIN_GAP_MS = 30_000;
 
 export class QuotaMonitor {
   private timer: NodeJS.Timeout | undefined;
   private last: QuotaUsagePayload | null = null;
   private inFlight = false;
+  /** 飞行中撞上的刷新请求（如切 provider 立即触发）：完成后补跑一轮，防新 provider 数据被吞 */
+  private pending = false;
   private lastFetchedAt = 0;
 
   constructor(
     private readonly credentialsPath: () => string,
+    /** 当前会话模型的 provider（额度跟随其 key）；无会话/未选模型为 undefined → rank 兜底 */
+    private readonly provider: () => string | undefined,
     private readonly push: (p: QuotaUsagePayload | null) => void
   ) {}
 
@@ -132,17 +149,21 @@ export class QuotaMonitor {
     }
   }
 
-  /** webview（重）挂载：缓存秒显，后台立即刷新校准 */
+  /** 显式触发（webview 挂载 / 切模型 / 发送消息）：缓存秒显 + 绕节流立即刷新 */
   refreshNow(): void {
     if (this.last) this.push(this.last);
-    void this.refresh();
+    void this.refresh(true);
   }
 
-  private async refresh(): Promise<void> {
-    if (this.inFlight || Date.now() - this.lastFetchedAt < MIN_GAP_MS) return;
+  private async refresh(force = false): Promise<void> {
+    if (this.inFlight) {
+      this.pending = true;
+      return;
+    }
+    if (!force && Date.now() - this.lastFetchedAt < MIN_GAP_MS) return;
     this.inFlight = true;
     try {
-      const snap = await fetchCodingPlanQuota(this.credentialsPath());
+      const snap = await fetchCodingPlanQuota(this.credentialsPath(), this.provider());
       this.lastFetchedAt = Date.now();
       this.last = snap;
       this.push(snap);
@@ -150,6 +171,10 @@ export class QuotaMonitor {
       /* 失败静默：圆环保留最后一次已知值，辅助信息绝不打断主流程 */
     } finally {
       this.inFlight = false;
+      if (this.pending) {
+        this.pending = false;
+        void this.refresh(true);
+      }
     }
   }
 }

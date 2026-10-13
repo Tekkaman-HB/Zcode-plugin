@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单）、./todoPanel（进程面板渲染）、./quotaRings（套餐用量圆环）、./icons、./format
+ * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单，含套餐用量弹窗）、./todoPanel（进程面板渲染）、./quotaRings（套餐用量圆环）、./icons、./format
  * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 应用壳 + 桥接消息入口；EventHost/QueueHost/MenuHost 的宿主实现）；含 diff 式 rebuildMessages（快照复用节点 + 流式消息跳过，根治全量重建闪烁）
  * [POS]: webview 的中枢——持有全部共享状态，事件适配/交互队列/菜单/进程面板渲染委托给子模块；slash/@ 弹层因需改写输入框文本留在本层
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -11,7 +11,7 @@ import type {
   PermissionRequestParams,
   UserInputRequestParams
 } from '../../protocol/types';
-import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef } from '../bridge';
+import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef, QuotaUsagePayload } from '../bridge';
 import { h, renderMessage, esc, resetToolCollapseState } from './render';
 import type { InteractionDraft } from './interaction';
 import { makeT, type Locale, type Translate } from './i18n';
@@ -135,6 +135,9 @@ export class ChatApp {
   ctxRingBtn!: HTMLButtonElement;
   /** 套餐用量双圆环（5 小时/每周）——数据由宿主 QuotaMonitor 经 quota-usage 消息推送 */
   private readonly quotaRings = createQuotaRings();
+  /** 圆环容器即弹层锚点（MenuHost 面）；最新载荷留存供弹窗渲染 */
+  readonly quotaRingBtn: HTMLElement = this.quotaRings.el;
+  quotaPayload: QuotaUsagePayload | null = null;
   slashIndex = -1;
   attachments: AttachmentRef[] = [];
   atDir = '';
@@ -218,6 +221,8 @@ export class ChatApp {
 
     this.composerInput.addEventListener('keydown', (e) => this.onKeydown(e));
     this.composerInput.addEventListener('input', () => this.onInput());
+    // 套餐用量圆环：点击弹用量明细弹窗（对标上下文圆环）
+    this.quotaRings.el.addEventListener('click', () => this.toggleQuotaMenu());
     // Cmd/Ctrl+V 粘贴图片：取剪贴板 image 项 → dataUrl → 宿主落地临时文件
     this.composerInput.addEventListener('paste', (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
@@ -250,7 +255,7 @@ export class ChatApp {
       const target = e.target as HTMLElement;
       if (this.popupEl.contains(target)) return;
       // 触发按钮自身的点击由各自 toggle 处理（同按钮=关闭，异按钮=换菜单）
-      if (target.closest?.('.bar-icon-btn, .composer-chip, .titlebar-btn, .ctx-ring-btn')) return;
+      if (target.closest?.('.bar-icon-btn, .composer-chip, .titlebar-btn, .ctx-ring-btn, .quota-rings')) return;
       this.hidePopup();
     });
     this.renderOverlay();
@@ -472,7 +477,10 @@ export class ChatApp {
         break;
       }
       case 'quota-usage':
+        this.quotaPayload = msg.data;
         this.quotaRings.update(msg.data, this.t, this.locale);
+        // 弹窗开着时数据到达 → 原地刷新（对标 ctx 弹层的 isOpenFor 补刷）
+        if (this.isOpenFor(this.quotaRingBtn)) this.toggleQuotaMenu(true);
         break;
       case 'error':
         this.showError(msg.message);
@@ -830,6 +838,7 @@ export class ChatApp {
   /** 菜单是否正锚定在该按钮上打开（./events 的圆环刷新也走这里） */
   isOpenFor(anchor: HTMLElement): boolean { return this.menus.isOpenFor(anchor); }
   toggleContextMenu(refresh = false): void { this.menus.toggleContextMenu(refresh); }
+  toggleQuotaMenu(refresh = false): void { this.menus.toggleQuotaMenu(refresh); }
 
   // ═══════════════ 附件与 @ 引用 ═══════════════
 
