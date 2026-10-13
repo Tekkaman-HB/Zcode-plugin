@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 ./credentials 的凭据解密与 providerId→apiKey 映射、全局 fetch/AbortSignal.timeout（Node 18+）
- * [OUTPUT]: 对外提供 QuotaWindowUsage/QuotaUsagePayload 类型、parseQuotaLimits（纯解析）、fetchCodingPlanQuota（单次拉取，可指定 provider）、QuotaMonitor（轮询器，显式触发绕节流）
- * [POS]: 根级套餐额度层——智谱 Coding Plan 5 小时/每周用量查询；extension.ts 装配轮询（provider 跟随当前会话模型）并经 chatProvider 推 webview 圆环；set-model/send 后 chatProvider 显式触发刷新
+ * [INPUT]: 依赖 ./credentials 的凭据解密与 providerId→apiKey 映射、node:fs 读个人 provider 配置、全局 fetch/AbortSignal.timeout（Node 18+）
+ * [OUTPUT]: 对外提供 QuotaWindowUsage/QuotaUsagePayload 类型、parseQuotaLimits（纯解析）、fetchCodingPlanQuota（单次拉取，key 解析三源：account 套餐凭据 → 个人 zhipu-coding-plan 模板 → rank 兜底）、QuotaMonitor（轮询器，显式触发绕节流）
+ * [POS]: 根级套餐额度层——智谱 Coding Plan 5 小时/每周用量查询；extension.ts 装配轮询（provider 跟随当前会话模型，切到个人套餐模型同样换查其 key）并经 chatProvider 推 webview 圆环；set-model/send 后 chatProvider 显式触发刷新
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
  * 接口契约（桌面端 app.asar + cc-switch 源码双向实证，2026-10）：
@@ -10,8 +10,9 @@
  *   data.limits[]: { type:'TOKENS_LIMIT'|'CREDIT_LIMIT', unit:3=5小时|6=每周, percentage(已用%), nextResetTime(ms) }
  *   data.level: 套餐等级（如 max/pro）
  * 注意：这是账户后端直连通道，与已移除的 usage/stats（CLI 协议 token 统计）无关，勿混淆。
- * 安全约束：api-key 只进请求头，严禁日志/遥测/错误消息。
+ * 安全约束：api-key（凭据与个人配置两源）只进请求头，严禁日志/遥测/错误消息。
  */
+import * as fs from 'node:fs';
 import { decryptCredentials, getProviderApiKey } from './credentials';
 
 /** 单窗口用量：percent=已用百分比（0-100），resetAt=窗口重置毫秒时间戳 */
@@ -42,6 +43,34 @@ function pickKeyByRank(values: Map<string, string | null>): string | null {
     if (!best || rank < best.rank) best = { rank, key: value };
   }
   return best ? best.key : null;
+}
+
+/**
+ * 个人 provider 配置（~/.zcode/v2/provider_config.json）里的智谱套餐 key：
+ * providerRules 中 providerId 匹配且 access.type 为 zhipu-coding-plan-api-key 的规则。
+ * 主机按模板路由（bigmodel-api → open.bigmodel.cn / zai-api → api.z.ai，与内置模板 baseUrl 一致）。
+ */
+function resolvePersonalProvider(personalConfigPath: string | undefined, providerId: string): { host: string; apiKey: string } | null {
+  if (!personalConfigPath) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(personalConfigPath, 'utf8'));
+  } catch {
+    return null; // 无个人配置（未配置任何自定义 provider）是常态
+  }
+  const rules = (parsed as { config?: { providerConfigRules?: { providerRules?: unknown[] } } } | null)
+    ?.config?.providerConfigRules?.providerRules;
+  if (!Array.isArray(rules)) return null;
+  for (const rule of rules) {
+    if (!rule || typeof rule !== 'object') continue;
+    const r = rule as { providerId?: unknown; templateId?: unknown; config?: { access?: { type?: unknown; apiKey?: unknown } } };
+    if (r.providerId !== providerId) continue;
+    const access = r.config?.access;
+    if (access?.type !== 'zhipu-coding-plan-api-key' || typeof access.apiKey !== 'string' || !access.apiKey) continue;
+    const host = String(r.templateId ?? '').toLowerCase().includes('zai') ? 'https://api.z.ai' : 'https://open.bigmodel.cn';
+    return { host, apiKey: access.apiKey };
+  }
+  return null;
 }
 
 /**
@@ -82,24 +111,31 @@ export function parseQuotaLimits(data: unknown): QuotaUsagePayload {
 }
 
 /**
- * 单次拉取套餐用量。
- * preferredProviderId = 当前会话模型的 provider（形如 account:bigmodel-individual-coding-plan）：
- * 指定时用它的 key 查（切套餐模型后圆环跟随新 key）；该 provider 无 coding-plan key（API key
- * 模板等非套餐模型）→ 返 null 隐藏圆环。未指定 → rank 兜底（individual 优先）。
- * null = 无凭据/非套餐；throw = 网络/服务失败（调用方保留旧值静默处理）。
+ * 单次拉取套餐用量。key 解析顺序（providerId = 当前会话模型的 provider）：
+ * 1. account: 套餐 provider → 凭据里它的 coding-plan key（切套餐模型后额度跟随新 key）；
+ * 2. 个人 provider（如 bigmodel-api/zai-api 模板）→ provider_config.json 里的套餐 key；
+ * 3. 都没有 → null（非套餐模型，圆环隐藏）。未指定 providerId → rank 兜底（individual 优先）。
+ * throw = 网络/服务失败（调用方保留旧值静默处理）。
  */
-export async function fetchCodingPlanQuota(credentialsPath: string, preferredProviderId?: string): Promise<QuotaUsagePayload | null> {
+export async function fetchCodingPlanQuota(credentialsPath: string, preferredProviderId?: string, personalConfigPath?: string): Promise<QuotaUsagePayload | null> {
   const creds = decryptCredentials(credentialsPath);
-  if (!creds) return null;
   let apiKey: string | null = null;
+  let host: string | null = null;
   if (preferredProviderId) {
-    apiKey = getProviderApiKey(creds, preferredProviderId);
-    if (!apiKey) return null; // 指定了 provider 但无对应套餐 key：非套餐模型，不展示
+    if (creds) apiKey = getProviderApiKey(creds, preferredProviderId);
+    if (apiKey && creds) host = resolveHost(creds.values);
+    if (!apiKey) {
+      const personal = resolvePersonalProvider(personalConfigPath, preferredProviderId);
+      if (personal) { apiKey = personal.apiKey; host = personal.host; }
+    }
+    if (!apiKey) return null;
   } else {
+    if (!creds) return null;
     apiKey = pickKeyByRank(creds.values);
     if (!apiKey) return null;
+    host = resolveHost(creds.values);
   }
-  const res = await fetch(`${resolveHost(creds.values)}/api/monitor/usage/quota/limit`, {
+  const res = await fetch(`${host}/api/monitor/usage/quota/limit`, {
     headers: {
       // 裸 key：智谱额度接口特有约定（cc-switch 实证），加 Bearer 前缀反而 401
       Authorization: apiKey,
@@ -132,6 +168,8 @@ export class QuotaMonitor {
     private readonly credentialsPath: () => string,
     /** 当前会话模型的 provider（额度跟随其 key）；无会话/未选模型为 undefined → rank 兜底 */
     private readonly provider: () => string | undefined,
+    /** 个人 provider 配置路径（~/.zcode/v2/provider_config.json，个人套餐 key 的来源） */
+    private readonly personalConfigPath: () => string | undefined,
     private readonly push: (p: QuotaUsagePayload | null) => void
   ) {}
 
@@ -163,7 +201,7 @@ export class QuotaMonitor {
     if (!force && Date.now() - this.lastFetchedAt < MIN_GAP_MS) return;
     this.inFlight = true;
     try {
-      const snap = await fetchCodingPlanQuota(this.credentialsPath(), this.provider());
+      const snap = await fetchCodingPlanQuota(this.credentialsPath(), this.provider(), this.personalConfigPath());
       this.lastFetchedAt = Date.now();
       this.last = snap;
       this.push(snap);

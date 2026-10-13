@@ -69,6 +69,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const quotaMonitor = new QuotaMonitor(
     () => env.credentialsPath,
     () => controller?.currentModelProvider ?? undefined,
+    () => env.personalConfigPath,
     (data) => chatProvider.post({ kind: 'quota-usage', data })
   );
   quotaMonitor.start();
