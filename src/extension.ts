@@ -99,7 +99,8 @@ export function activate(context: vscode.ExtensionContext): void {
       toWebview: (msg: ToWebviewMessage) => chatProvider.post(msg),
       onModeChange: (mode) => {
         if (PICKABLE_MODES.has(mode)) void context.globalState.update(LAST_MODE_KEY, mode);
-      }
+      },
+      onInteractionLog: (line) => srv.logInteraction(line)
     });
     server = srv;
     controller = ctl;

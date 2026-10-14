@@ -1,9 +1,10 @@
 /**
- * [INPUT]: 依赖 node:child_process，消费 ./protocol/rpc、./protocol/types、./environment、./account
- * [OUTPUT]: 对外提供 ZcodeServer（单工作区 app-server 守护）与反向请求路由
+ * [INPUT]: 依赖 node:child_process、vscode（OutputChannel 交互诊断日志），消费 ./protocol/rpc、./protocol/types、./environment、./account
+ * [OUTPUT]: 对外提供 ZcodeServer（单工作区 app-server 守护）、反向请求路由与 logInteraction（交互生命周期诊断出口）
  * [POS]: 进程管理层——spawn/推送账户/重启退避，被 sessionController.ts 消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+import * as vscode from 'vscode';
 import { RpcClient } from './protocol/rpc';
 import type {
   PermissionRequestParams,
@@ -39,6 +40,8 @@ export class ZcodeServer {
   private credentialsWatcher: CredentialsWatcher | undefined;
   private disposed = false;
   private startSeq = 0;
+  /** 交互生命周期诊断出口（懒建 OutputChannel）——权限/用户输入卡的收包、应答、撤回一行式留痕，排障定案用 */
+  private diagChannel: vscode.OutputChannel | null = null;
   accountSnapshot: AccountSnapshot | null = null;
 
   constructor(workspacePath: string, env: ZcodeEnvironment, cbs: ZcodeServerCallbacks) {
@@ -49,6 +52,16 @@ export class ZcodeServer {
 
   get currentState(): ServerState {
     return this.state;
+  }
+
+  /** 交互诊断一行式（requestId 级）——OutputChannel "Zcode Protocol"，仅交互生命周期事件，非噪声流 */
+  logInteraction(line: string): void {
+    try {
+      this.diagChannel ??= vscode.window.createOutputChannel('Zcode Protocol');
+      this.diagChannel.appendLine(`[${new Date().toISOString()}] ${line}`);
+    } catch {
+      /* 通道创建失败静默：诊断日志不可拖垮主链路 */
+    }
   }
 
   /** 幂等启动：spawn → 推送账户 → ready */
@@ -161,12 +174,15 @@ export class ZcodeServer {
       }
       case 'interaction/requestPermission': {
         const req = params as PermissionRequestParams;
+        this.logInteraction(`recv permission requestId=${req.requestId} tool=${req.toolName} options=${req.options?.length ?? 0}`);
         return new Promise((resolve) => {
           this.cbs.onPermissionRequest(req, resolve);
         });
       }
       case 'interaction/requestUserInput': {
         const req = params as UserInputRequestParams;
+        const qn = Array.isArray((req as { questions?: unknown[] }).questions) ? (req as { questions: unknown[] }).questions.length : 0;
+        this.logInteraction(`recv userInput requestId=${req.requestId} tool=${req.toolName ?? '-'} questions=${qn}`);
         return new Promise((resolve) => {
           this.cbs.onUserInputRequest(req, (result) => resolve(result));
         });

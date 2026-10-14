@@ -376,6 +376,17 @@ export class ChatApp {
         if (changed) this.markDirtyPermissions();
         break;
       }
+      case 'interactions-dropped':
+        // 宿主已对未答交互自动撤回（stop/插队/会话生命周期）——卡若还挂着就是"可作答"假象，
+        // 立即清空并提示（session-closed/snapshot 路径已自带清理，这里兜 stop/dispose 的漏网）
+        this.pendingPermissions.clear();
+        this.pendingUserInputs.clear();
+        this.interactionOrder = [];
+        this.ixDrafts.clear();
+        this.ixHeadId = null;
+        this.markDirtyPermissions();
+        this.showError(this.t('ixDropped'));
+        break;
       case 'sessions-list':
         this.menus.renderSessionsMenu(msg.data.sessions);
         break;

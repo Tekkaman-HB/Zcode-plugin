@@ -96,6 +96,7 @@ export type ToWebviewMessage =
   | { kind: 'state-updated'; data: { patch: Record<string, unknown>; revision: number; reason?: string } }
   | { kind: 'permission-request'; data: PermissionRequestParams }
   | { kind: 'user-input-request'; data: UserInputRequestParams }
+  | { kind: 'interactions-dropped' }
   | { kind: 'sessions-list'; data: SessionsListPayload }
   | { kind: 'messages'; data: { messages: SessionMessage[] } }
   | { kind: 'mcp-progress'; data: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } }

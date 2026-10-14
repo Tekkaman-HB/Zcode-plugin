@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约
- * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）
+ * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）；setMode 受理后主动回推 webview state-updated patch（模式芯片即时归位，不依赖 CLI 广播）；交互生命周期留痕（onInteractionLog → serverManager OutputChannel）与失效自卫（dropPendingInteractions 撤回时回发 interactions-dropped 清 webview 交互卡；对已失效请求的应答显式回执 error 提示而非静默吞掉）
  * [POS]: 会话控制层——extension.ts 与 UI Provider 之间的业务中枢
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -18,12 +18,15 @@ import type {
 } from './protocol/types';
 import { asSessionEvent, asStateUpdated } from './protocol/types';
 import { ZcodeServer } from './serverManager';
+import { makeT, detectLocale } from './i18n';
 import type { ToWebviewMessage, SessionSnapshotPayload } from './ui/bridge';
 
 export interface SessionControllerCallbacks {
   toWebview: (msg: ToWebviewMessage) => void;
   /** 有效模式落定上报（新建/恢复/用户切换/CLI 侧改模式）→ 宿主据此持久化"最近使用模式" */
   onModeChange?: (mode: SessionMode) => void;
+  /** 交互生命周期诊断一行式 → serverManager.logInteraction（OutputChannel "Zcode Protocol"） */
+  onInteractionLog?: (line: string) => void;
 }
 
 export class SessionController {
@@ -163,7 +166,14 @@ export class SessionController {
     const list = this.permissionResponders.get(requestId);
     this.permissionResponders.delete(requestId);
     this.pendingPermissionReqs.delete(requestId);
-    for (const fn of list ?? []) fn(result);
+    if (!list?.length) {
+      // 应答落在已失效请求上（stop/会话切换已自动撤回）：明确回执，不再静默吞掉用户的点击
+      this.cbs.onInteractionLog?.(`stale permission answer requestId=${requestId}`);
+      this.cbs.toWebview({ kind: 'error', message: makeT(detectLocale())('interactionStale') });
+      return;
+    }
+    this.cbs.onInteractionLog?.(`answer permission requestId=${requestId} decision=${(result as { decision?: string })?.decision ?? '?'}`);
+    for (const fn of list) fn(result);
   }
 
   handleUserInputRequest(req: UserInputRequestParams, respond: (result: UserInputResponse) => void): void {
@@ -178,7 +188,14 @@ export class SessionController {
     const list = this.userInputResponders.get(requestId);
     this.userInputResponders.delete(requestId);
     this.pendingUserInputReqs.delete(requestId);
-    for (const fn of list ?? []) fn(response);
+    if (!list?.length) {
+      // 同 respondPermission：失效应答显式回执（计划审批卡在撤回后点击"同意"曾无声无息）
+      this.cbs.onInteractionLog?.(`stale userInput answer requestId=${requestId}`);
+      this.cbs.toWebview({ kind: 'error', message: makeT(detectLocale())('interactionStale') });
+      return;
+    }
+    this.cbs.onInteractionLog?.(`answer userInput requestId=${requestId} action=${response.action}`);
+    for (const fn of list) fn(response);
   }
 
   /** webview 重载后重投未答交互卡（reannounce 兜不住跨重载的投递） */
@@ -192,16 +209,24 @@ export class SessionController {
   }
 
   dropPendingInteractions(): void {
-    for (const list of this.permissionResponders.values()) {
+    const permCount = this.permissionResponders.size;
+    const inputCount = this.userInputResponders.size;
+    for (const [requestId, list] of this.permissionResponders) {
+      this.cbs.onInteractionLog?.(`drop permission requestId=${requestId} (auto-decline, session lifecycle)`);
       for (const fn of list) fn({ decision: 'deny', reason: 'session closed' });
     }
     this.permissionResponders.clear();
     this.pendingPermissionReqs.clear();
-    for (const list of this.userInputResponders.values()) {
+    for (const [requestId, list] of this.userInputResponders) {
+      this.cbs.onInteractionLog?.(`drop userInput requestId=${requestId} (auto-decline, session lifecycle)`);
       for (const fn of list) fn({ action: 'decline', reason: 'session closed' });
     }
     this.userInputResponders.clear();
     this.pendingUserInputReqs.clear();
+    if (permCount || inputCount) {
+      // 有真实撤回才通知：webview 上的交互卡已与宿主真相背离（还挂着"可作答"的假象），立即清卡+提示
+      this.cbs.toWebview({ kind: 'interactions-dropped' });
+    }
   }
 
   // ═══════════════ 会话操作 ═══════════════
@@ -420,6 +445,10 @@ export class SessionController {
       mode
     });
     this.cbs.onModeChange?.(mode);
+    // 模式芯片即时归位：CLI 的 state.updated 对协议客户端的广播不保证及时存在（实测 CLI 已受理
+    // mode.updated 而 UI 滞后不动，用户连点多次以为切换失败）——受理成功即本地权威回推，
+    // 与 watchdog 恢复同形状（patch.settings 形状 {mode:{current}}），CLI 后续权威补丁自然覆盖
+    this.cbs.toWebview({ kind: 'state-updated', data: { patch: { mode: { current: mode } }, revision: 0, reason: 'set-mode-applied' } });
   }
 
   /** 回合结束后拉取权威消息列表，校准流式渲染 */

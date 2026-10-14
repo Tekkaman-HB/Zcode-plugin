@@ -22,7 +22,8 @@ const strings = {
     appMissing: '未找到 ZCode 桌面端（{path}）。请在设置 zcode.appPath 中指定安装路径。',
     serverFailed: 'ZCode 服务启动失败：{msg}',
     noWorkspace: '请先打开一个文件夹再使用 ZCode。',
-    openDesktopFailed: '无法打开 ZCode 桌面端：{msg}'
+    openDesktopFailed: '无法打开 ZCode 桌面端：{msg}',
+    interactionStale: '该交互请求已失效（会话操作时被撤回），无需再作答。'
   },
   'en-US': {
     loginTerminalTitle: 'ZCode Login',
@@ -32,7 +33,8 @@ const strings = {
     appMissing: 'ZCode desktop app not found ({path}). Set zcode.appPath to its install location.',
     serverFailed: 'ZCode server failed to start: {msg}',
     noWorkspace: 'Open a folder first to use ZCode.',
-    openDesktopFailed: 'Cannot open ZCode desktop app: {msg}'
+    openDesktopFailed: 'Cannot open ZCode desktop app: {msg}',
+    interactionStale: 'This interaction request is no longer valid (withdrawn during a session action).'
   }
 } as const;
 
