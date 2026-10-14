@@ -345,9 +345,18 @@ export class ChatApp {
         this.renderHeaderControls();
         this.renderOverlay();
         break;
-      case 'session-event':
+      case 'session-event': {
+        // 回合 status 走 session.updated 投影通道（state.updated 不带）——status/后台任务真正变化时
+        // 同步发送按钮供能与圆环（流式 delta 高频，不能无条件刷）；state-updated 路径由 renderStatus 覆盖
+        const prevStatus = this.session?.projection.status;
+        const prevJobs = this.session?.projection.backgroundJobs?.length ?? 0;
         applySessionEvent(this, msg.data);
+        if (this.session && (this.session.projection.status !== prevStatus
+          || (this.session.projection.backgroundJobs?.length ?? 0) !== prevJobs)) {
+          this.renderStatus();
+        }
         break;
+      }
       case 'state-updated':
         this.applyProjectionPatch(msg.data.patch);
         break;
