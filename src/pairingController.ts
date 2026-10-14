@@ -49,6 +49,10 @@ export interface PairingControllerOptions {
   lock?: PairingLock;
   /** 面板展示的身份来源标注（宿主侧本地化，如「共享桌面设备身份（…xxxxxx）」） */
   identityLabel?: () => string;
+  /** 手动开始前的冲突确认（桌面端远控开着时宿主弹窗）；返回 false 取消本次配对 */
+  confirmStart?: () => Promise<boolean>;
+  /** 桌面端远控是否开着（autoRestore 前静默让位——共享身份，避免启动即互踢） */
+  desktopRemoteActive?: () => boolean;
   push: (msg: { kind: 'pair-status'; data: PairingPanelPayload }) => void;
   logger: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void; error: (...a: unknown[]) => void };
 }
@@ -77,6 +81,8 @@ export class PairingController implements vscode.Disposable {
 
   /** 常驻自动连接：activate 时若存在持久化配对且开关允许则静默拉起（仅当跨窗口租约空闲——同身份多窗口会互踢） */
   autoRestore(): void {
+    // 桌面端远控开着时静默让位（共享身份，启动即抢会互踢）；用户手动点「手机配对」时会有确认弹窗
+    if (this.options.desktopRemoteActive?.()) return;
     if (!this.options.lock?.acquire(false)) return;
     void this.options.storage
       .load()
@@ -94,11 +100,16 @@ export class PairingController implements vscode.Disposable {
       });
   }
 
-  /** 打开/启动配对：幂等；未启用或环境缺失时以状态消息回报。手动入口=强制抢占租约 */
+  /** 打开/启动配对：幂等；未启用或环境缺失时以状态消息回报。手动入口=强制抢占租约+冲突确认 */
   async start(): Promise<void> {
     if (this.disposed) return;
     if (!this.options.pairingEnabled()) {
       this.handleStatus({ kind: 'error', message: '手机配对已通过 zcode.remotePairing.enabled 关闭。' });
+      return;
+    }
+    // 共享桌面身份时的冲突门：桌面端远控开着会互踢（面板闪烁/手机连不上）——先问，再战
+    if (this.options.confirmStart && !(await this.options.confirmStart().catch(() => true))) {
+      this.pushCurrent();
       return;
     }
     this.options.lock?.acquire(true);

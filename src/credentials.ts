@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 node:fs/crypto/os，读取 ~/.zcode/v2/credentials.json
- * [OUTPUT]: 对外提供 decryptCredentials / getProviderApiKey / readDesktopRelayIdentity（凭据解密、provider→apiKey 映射、桌面端 relay 设备身份读取）
+ * [OUTPUT]: 对外提供 decryptCredentials / getProviderApiKey / readDesktopRelayIdentity / isDesktopRemoteControlActive（凭据解密、provider→apiKey 映射、桌面端 relay 设备身份与远控开关状态读取）
  * [POS]: 凭据层——与桌面端同构的 enc:v1 解密，serverManager 应答 requestProviderRuntimeHeaders 时消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
@@ -101,6 +101,22 @@ export interface DesktopRelayIdentity {
 }
 
 const RELAY_PASS_HASH_KEY = 'web-remote-control:external-relay:pass_hash';
+
+/**
+ * 桌面端「手机远控」是否处于开启状态：桌面端 start 远控时写
+ * setting.json 的 webRemoteControlLastEnabledContext，stop 时清除（源码实证）。
+ * 与插件共享设备身份——此键存在时插件侧配对会与之互踢，应提示用户先关闭桌面端远控。
+ */
+export function isDesktopRemoteControlActive(settingPath: string): boolean {
+  try {
+    const setting = JSON.parse(fs.readFileSync(settingPath, 'utf8')) as {
+      webRemoteControlLastEnabledContext?: unknown;
+    };
+    return Boolean(setting.webRemoteControlLastEnabledContext);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * 读桌面端已配对的 relay 设备身份：deviceSid（setting.json）+ passHash（credentials.json enc:v1 解密）

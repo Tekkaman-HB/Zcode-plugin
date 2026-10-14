@@ -14,7 +14,7 @@ import type { ToWebviewMessage } from './ui/bridge';
 import { detectLocale, makeT, type Locale, type StringKey } from './i18n';
 import { QuotaMonitor } from './quotaUsage';
 import { PairingController, DEFAULT_RELAY_WS_URL, DEFAULT_SERVER_PATH } from './pairingController';
-import { readDesktopRelayIdentity } from './credentials';
+import { readDesktopRelayIdentity, isDesktopRemoteControlActive } from './credentials';
 import type { SessionMode } from './protocol/types';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -184,6 +184,17 @@ export function activate(context: vscode.ExtensionContext): void {
       const desktop = readDesktopRelayIdentity(env.credentialsPath, env.settingPath, env.telemetryStatePath);
       return desktop ? `配对身份：共享桌面设备（…${desktop.deviceSid.slice(-6)}）` : '配对身份：插件自注册';
     },
+    // 共享桌面身份 + 桌面端远控开着 → 弹模态确认（取消则不连接并给出行动指引）
+    confirmStart: async () => {
+      const usesDesktopIdentity = Boolean(readDesktopRelayIdentity(env.credentialsPath, env.settingPath, env.telemetryStatePath));
+      if (!usesDesktopIdentity || !isDesktopRemoteControlActive(env.settingPath)) return true;
+      const pick = await vscode.window.showWarningMessage(t('pairConflict'), { modal: true }, t('pairConflictContinue'));
+      if (pick === t('pairConflictContinue')) return true;
+      vscode.window.showInformationMessage(t('pairConflictCancelled'));
+      return false;
+    },
+    // autoRestore 静默让位：桌面端远控开着时不自动抢连接（用户手动点配对才弹确认）
+    desktopRemoteActive: () => isDesktopRemoteControlActive(env.settingPath),
     push: (msg) => chatProvider.post(msg),
     logger: pairingLogger
   });
