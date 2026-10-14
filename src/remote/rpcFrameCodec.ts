@@ -83,7 +83,13 @@ function identityFrom(value: RelayBridgeIdentity): RelayBridgeIdentity {
   ) {
     throw new RpcFrameEncodingError('remote.rpcFrame.invalidIdentity');
   }
-  return value;
+  // 只取身份三元组——官方 zod strict 解析会剥未知字段（firstPhysicalSeq 等 options 键），
+  // 不剥则帧携带多余字段被线上页面 strict schema 拒收（terminal fault → recover 风暴，2026-10 实证）
+  return {
+    bridgeSessionId: value.bridgeSessionId,
+    ...(value.bridgeGeneration !== undefined ? { bridgeGeneration: value.bridgeGeneration } : {}),
+    ...(value.recoveryId !== undefined ? { recoveryId: value.recoveryId } : {}),
+  };
 }
 
 /** 二分求单帧解码预算：固定壳 + base64(len) ≤ 物理上限 的最大 len */

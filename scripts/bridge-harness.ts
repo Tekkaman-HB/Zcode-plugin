@@ -42,6 +42,14 @@ async function main(): Promise<void> {
         nodeCommand: process.execPath,
         serverPath,
         cwd: target.workspacePath,
+        env: {
+          ZCODE_AGENT_SERVER_COMMAND: process.execPath,
+          ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
+            '/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs',
+            'app-server',
+            '--stdio',
+          ]),
+        },
         clientVersion: '0.0.0-harness',
         logger: { info: () => {}, warn: () => {}, error: () => {} },
       }),

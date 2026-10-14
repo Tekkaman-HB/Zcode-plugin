@@ -162,8 +162,14 @@ export class PairingController implements vscode.Disposable {
       serverPath,
       cwd: target.workspacePath,
       env: {
+        ...env.nodeExtraEnv,
         ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: env.builtinConfigPath,
         ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: env.personalConfigPath,
+        // services 拉 agent（打开任务/新建会话）的命令解析链在我们环境全不命中（无 monorepo/
+        // Electron/部署二进制），必须显式下发——与 serverManager 自身 spawn app-server 同一形状：
+        // <node> <zcode.cjs> app-server --stdio，cwd 由 services 按 workspacePath 注入
+        ZCODE_AGENT_SERVER_COMMAND: env.nodeCommand,
+        ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([env.cliPath, 'app-server', '--stdio']),
       },
       clientVersion: this.options.appVersion,
       logger: this.options.logger,
