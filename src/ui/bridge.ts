@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无运行时依赖，消费 ../protocol/types 的协议类型
- * [OUTPUT]: 对外提供 ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload（扩展↔webview 消息契约与载荷类型）
+ * [OUTPUT]: 对外提供 ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload / PairingPanelPayload（扩展↔webview 消息契约与载荷类型；pair-* 双向消息承载手机配对面板）
  * [POS]: ui 的桥接类型层，extension 侧与 webview 侧共同消费，保证两端契约同构
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -86,6 +86,15 @@ export interface QuotaUsagePayload {
   level: string | null;
 }
 
+/** 手机配对面板载荷（宿主 PairingController 生成；qrSvg 为宿主侧渲染好的内联 SVG；identity=身份来源标注） */
+export interface PairingPanelPayload {
+  status: 'idle' | 'starting' | 'waiting' | 'active' | 'error';
+  qrSvg?: string;
+  qrUrl?: string;
+  message?: string;
+  identity?: string;
+}
+
 export type ToWebviewMessage =
   | { kind: 'bootstrap'; data: BootstrapPayload }
   | { kind: 'server-state'; state: ServerState; detail?: string }
@@ -108,6 +117,7 @@ export type ToWebviewMessage =
   | { kind: 'files-list'; data: { dir: string; entries: DirEntry[] } }
   | { kind: 'show-preview'; data: { name: string; mime: string; dataUrl: string } }
   | { kind: 'image-saved'; data: { path: string; name: string; mime: string } }
+  | { kind: 'pair-status'; data: PairingPanelPayload }
   | { kind: 'error'; message: string };
 
 // ═══════════════ webview → 扩展 ═══════════════
@@ -134,4 +144,8 @@ export type FromWebviewMessage =
   | { kind: 'open-in-desktop' }
   | { kind: 'open-preview'; name: string; mime?: string; dataUrl?: string }
   | { kind: 'refresh-messages' }
+  | { kind: 'pair-phone' }
+  | { kind: 'pair-stop' }
+  | { kind: 'pair-refresh' }
+  | { kind: 'pair-copy-link'; url: string }
   | { kind: 'ready' };

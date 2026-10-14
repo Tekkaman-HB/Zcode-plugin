@@ -893,6 +893,40 @@ button:focus-visible, .ui-choice:focus-visible, .perm-option:focus-visible,
 .preview-close:hover { background: rgba(255, 255, 255, .22); }
 .preview-close:active { transform: scale(.94); }
 
+/* ═══════════ 手机配对面板 ═══════════ */
+.pair-card {
+  width: min(320px, 92vw); background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-window); box-shadow: var(--shadow-overlay);
+  padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 12px;
+  animation: pop-in 180ms var(--ease-out);
+}
+.pair-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.pair-head .icon-svg { display: inline-flex; }
+.pair-state { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
+.pair-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--ink-3); flex: none; }
+.pair-state.waiting .pair-dot { background: var(--accent, #f59e0b); animation: pulse 1.6s var(--ease-out) infinite; }
+.pair-state.active .pair-dot { background: #22c55e; }
+.pair-state.error .pair-dot { background: var(--red); }
+.pair-message { color: var(--ink-3); font-size: 11px; width: 100%; }
+.pair-qr {
+  align-self: center; width: 208px; height: 208px; background: #fff; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.pair-qr svg { width: 100%; height: 100%; display: block; }
+.pair-qr.stale { opacity: .35; filter: grayscale(1); transition: opacity 300ms var(--ease-out); }
+.pair-qr-pending { color: #999; font-size: 22px; }
+.pair-hint { font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
+.pair-hint.sub { font-size: 10.5px; }
+.pair-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.pair-btn {
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink);
+  font-size: 11.5px; padding: 5px 12px; border-radius: 7px; cursor: pointer;
+  transition: background-color 100ms var(--ease-out), transform var(--dur) var(--ease-out);
+}
+.pair-btn:hover { background: var(--surface-2, rgba(128, 128, 128, .12)); }
+.pair-btn:active { transform: scale(.97); }
+.pair-btn.primary { background: var(--accent, #2563eb); border-color: transparent; color: #fff; }
+
 /* ═══════════ 杂项 ═══════════ */
 .error-toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 99;

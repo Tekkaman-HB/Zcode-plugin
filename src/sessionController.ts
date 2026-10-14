@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约
- * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）；setMode 受理后主动回推 webview state-updated patch（模式芯片即时归位，不依赖 CLI 广播）；交互生命周期留痕（onInteractionLog → serverManager OutputChannel）与失效自卫（dropPendingInteractions 撤回时回发 interactions-dropped 清 webview 交互卡；对已失效请求的应答显式回执 error 提示而非静默吞掉）
+ * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约、./remote 的 RelayTaskTarget 类型
+ * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）；setMode 受理后主动回推 webview state-updated patch（模式芯片即时归位，不依赖 CLI 广播）；交互生命周期留痕（onInteractionLog → serverManager OutputChannel）与失效自卫（dropPendingInteractions 撤回时回发 interactions-dropped 清 webview 交互卡；对已失效请求的应答显式回执 error 提示而非静默吞掉）；手机端任务快照（mobileTasks 缓存 + refreshMobileTaskSnapshot 翻译 session/list、busy 会话标 running——回合结束/新建会话时刷新，onSnapshotChanged 通知宿主推手机）
  * [POS]: 会话控制层——extension.ts 与 UI Provider 之间的业务中枢
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -20,6 +20,7 @@ import { asSessionEvent, asStateUpdated } from './protocol/types';
 import { ZcodeServer } from './serverManager';
 import { makeT, detectLocale } from './i18n';
 import type { ToWebviewMessage, SessionSnapshotPayload } from './ui/bridge';
+import type { RelayTaskTarget } from './remote';
 
 export interface SessionControllerCallbacks {
   toWebview: (msg: ToWebviewMessage) => void;
@@ -27,6 +28,14 @@ export interface SessionControllerCallbacks {
   onModeChange?: (mode: SessionMode) => void;
   /** 交互生命周期诊断一行式 → serverManager.logInteraction（OutputChannel "Zcode Protocol"） */
   onInteractionLog?: (line: string) => void;
+  /** 会话集合/状态变化（回合结束、新建、恢复）→ 宿主刷新手机端任务快照并推送 */
+  onSnapshotChanged?: () => void;
+}
+
+/** 路径末段（工作区卡片标签） */
+function pathBasename(p: string): string {
+  const segments = p.replace(/\\/g, '/').split('/').filter(Boolean);
+  return segments[segments.length - 1] ?? p;
 }
 
 export class SessionController {
@@ -41,6 +50,8 @@ export class SessionController {
   private pendingPermissionReqs = new Map<string, PermissionRequestParams>();
   private pendingUserInputReqs = new Map<string, UserInputRequestParams>();
   private currentSessionId: string | null = null;
+  /** 当前会话所属工作区路径（手机端任务快照的 session/list 过滤键） */
+  private workspaceRef: string | undefined;
   /** 当前会话所选模型的 providerId（create/resume 快照与 setModel 三路维护） */
   private currentModelProviderId: string | null = null;
   private mcpStarted = 0;
@@ -106,6 +117,8 @@ export class SessionController {
         if (ev.type === 'turn.completed' || ev.type === 'turn.failed') {
           this.busy = false;
           this.scheduleQueueDrain();
+          // 回合结束即刷新手机端任务快照（busy→idle 的状态迁移要反映到手机首页）
+          void this.refreshMobileTaskSnapshot(this.workspaceRef);
         }
         this.cbs.toWebview({ kind: 'session-event', data: ev });
       }
@@ -251,6 +264,7 @@ export class SessionController {
       ...(model ? { model } : {})
     });
     this.currentSessionId = result.session.sessionId;
+    this.workspaceRef = workspacePath;
     this.currentModelProviderId = result.settings?.model?.current?.providerId ?? null;
     this.cbs.onModeChange?.(result.session.mode);
     this.dropPendingInteractions();
@@ -263,6 +277,7 @@ export class SessionController {
     this.pendingQueue = [];
     this.cbs.toWebview({ kind: 'session-snapshot', data: this.snapshotPayload(result) });
     await this.subscribe(result.session.sessionId);
+    void this.refreshMobileTaskSnapshot(workspacePath);
     return result;
   }
 
@@ -468,6 +483,35 @@ export class SessionController {
     return this.server.request<SessionListResult>('session/list', {
       ...(workspacePath ? { workspace: { workspacePath, workspaceKey: workspacePath } } : {})
     });
+  }
+
+  /** 手机端首页任务快照（session/list 缓存翻译；busy 会话标记 running 由装配层过滤） */
+  mobileTaskSnapshot(): RelayTaskTarget[] {
+    return this.mobileTasks;
+  }
+
+  /** 手机端任务缓存（session/list 结果翻译；由 extension 在会话变化时刷新） */
+  mobileTasks: RelayTaskTarget[] = [];
+
+  async refreshMobileTaskSnapshot(workspacePath?: string): Promise<void> {
+    try {
+      const result = await this.listSessions(workspacePath);
+      const busy = this.busy;
+      this.mobileTasks = (result.sessions ?? [])
+        .map((s) => ({
+          taskId: s.sessionId,
+          title: s.title || '未命名会话',
+          workspacePath: s.workspace?.workspacePath ?? workspacePath ?? '',
+          workspaceLabel: pathBasename(s.workspace?.workspacePath ?? workspacePath ?? ''),
+          workspaceKind: 'local' as const,
+          createdAt: s.updatedAt,
+          updatedAt: s.updatedAt,
+          displayStatus: s.sessionId === this.currentSessionId && busy ? ('running' as const) : ('idle' as const)
+        }));
+      this.cbs.onSnapshotChanged?.();
+    } catch {
+      /* 快照失败保留旧值 */
+    }
   }
 
   closeSessionUI(): void {

@@ -2,7 +2,7 @@
   "name": "zcode-vscode",
   "displayName": "Zcode plan tool",
   "description": "ZCode for VSCode — Z.ai 智能编程助手，复用桌面端账户认证，对接 ZCode CLI 协议",
-  "version": "0.5.17",
+  "version": "0.5.22",
   "publisher": "huangbing",
   "license": "MIT",
   "private": true,
@@ -62,6 +62,10 @@
       {
         "command": "zcode.openInDesktopApp",
         "title": "ZCode: Open in Desktop App"
+      },
+      {
+        "command": "zcode.pairPhone",
+        "title": "ZCode: Pair Phone"
       }
     ],
     "configuration": {
@@ -77,6 +81,11 @@
           "default": "",
           "description": "运行 zcode CLI 所用的 Node 可执行文件路径。留空则依次尝试 PATH 中的 node、VSCode 内置 Node。"
         },
+        "zcode.serverPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "手机配对所用的 `zcode-server.cjs` 路径。留空则使用 `~/.zcode/vscode-remote/zcode-server.cjs`（需按文档安装）。"
+        },
         "zcode.defaultMode": {
           "type": "string",
           "enum": [
@@ -87,6 +96,16 @@
           ],
           "default": "build",
           "description": "新会话的默认权限模式。"
+        },
+        "zcode.remotePairing.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用手机配对（注册官方 relay，手机扫码远程操控本工作区）。关闭后已配对连接停止且不再自动恢复。"
+        },
+        "zcode.remotePairing.relayUrl": {
+          "type": "string",
+          "default": "wss://zcode.z.ai/ws",
+          "description": "手机配对的 relay WebSocket 地址（默认官方生产服务）。"
         }
       }
     }
@@ -96,6 +115,8 @@
     "typecheck": "tsc --noEmit",
     "watch": "node esbuild.js --watch",
     "smoke": "node esbuild.js && node out/scripts/smoke.js",
+    "smoke:relay": "node esbuild.js && node out/scripts/smoke-relay.js",
+    "smoke:server": "node esbuild.js && node out/scripts/smoke-server.js",
     "ui-preview": "node scripts/ui-preview.mjs",
     "theme-check": "node scripts/theme-check.mjs",
     "package": "npm run build && vsce package --allow-missing-repository",
@@ -104,14 +125,18 @@
     "docs:new-adr": "bash scripts/docs/new-adr.sh"
   },
   "dependencies": {
-    "marked": "^15.0.0"
+    "marked": "^15.0.0",
+    "qrcode": "^1.5.4",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.6",
     "@types/vscode": "^1.95.0",
+    "@types/ws": "^8.18.2",
+    "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.0",
-    "typescript": "^5.7.0",
-    "@vscode/vsce": "^3.0.0"
+    "typescript": "^5.7.0"
   },
   "icon": "media/icon.png"
 }

@@ -1,7 +1,8 @@
 /**
- * [INPUT]: 依赖 vscode，消费 ./environment / ./account / ./serverManager / ./sessionController / ./ui/* / ./i18n / ./quotaUsage
+ * [INPUT]: 依赖 vscode，消费 ./environment / ./account / ./serverManager / ./sessionController / ./ui/* / ./i18n / ./quotaUsage / ./pairingController
  * [OUTPUT]: 对外提供 activate / deactivate（插件生命周期入口）
- * [POS]: 激活中枢——装配环境探测、服务守护、会话控制与聊天侧栏视图；globalState 持久化最近使用模式（新窗口/新会话延续）
+ * [POS]: 激活中枢——装配环境探测、服务守护、会话控制、聊天侧栏视图与手机配对（常驻 relay 通道 + autoRestore）；
+ *        globalState 持久化最近使用模式（新窗口/新会话延续）与配对身份
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import * as vscode from 'vscode';
@@ -12,13 +13,22 @@ import { ChatViewProvider, type ChatViewHost } from './ui/chatProvider';
 import type { ToWebviewMessage } from './ui/bridge';
 import { detectLocale, makeT, type Locale, type StringKey } from './i18n';
 import { QuotaMonitor } from './quotaUsage';
+import { PairingController, DEFAULT_RELAY_WS_URL, DEFAULT_SERVER_PATH } from './pairingController';
+import { readDesktopRelayIdentity } from './credentials';
 import type { SessionMode } from './protocol/types';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 // ═══════════════ 最近使用模式（globalState 跨窗口延续） ═══════════════
 const LAST_MODE_KEY = 'zcode.lastMode';
 /** 可选模式集合 = 配置 enum；'auto' 为 CLI 内部态（菜单不可选），不持久化 */
 const PICKABLE_MODES: ReadonlySet<string> = new Set(['plan', 'build', 'edit', 'yolo']);
+/** 手机配对身份（deviceSid/passHash 等价配对口令——严禁日志，仅 globalState 与协议字段） */
+const PAIRING_AUTH_KEY = 'zcode.remotePairing.auth';
+/** 跨窗口配对租约（同一设备身份同时只能一端在线——多窗口同时配对会互踢闪烁） */
+const PAIRING_LEASE_KEY = 'zcode.remotePairing.lease';
+const PAIRING_LEASE_TTL_MS = 45_000;
+const PAIRING_LEASE_HEARTBEAT_MS = 15_000;
 
 export function activate(context: vscode.ExtensionContext): void {
   const locale = detectLocale();
@@ -61,7 +71,8 @@ export function activate(context: vscode.ExtensionContext): void {
     onLogin: () => startLogin(t, locale),
     onLogout: () => void runLogout(t),
     onOpenDesktop: () => openDesktopApp(t),
-    onRefreshQuota: () => quotaMonitor.refreshNow()
+    onRefreshQuota: () => quotaMonitor.refreshNow(),
+    pairing: () => pairing
   } satisfies ChatViewHost);
 
   // ── 套餐用量轮询（5 小时/每周圆环数据源；provider 跟随当前会话模型——切换套餐
@@ -73,6 +84,110 @@ export function activate(context: vscode.ExtensionContext): void {
     (data) => chatProvider.post({ kind: 'quota-usage', data })
   );
   quotaMonitor.start();
+
+  // ── 手机配对（常驻：注册官方 relay 出二维码，手机扫码后经本地 zcode-server 远控工作区；
+  //    配对身份持久化于 globalState，重启自动恢复连接——桌面端 restorePreviouslyEnabled 同款） ──
+  // 协议契约版本：QR 的 app_version 与 bootstrap 的 desktopAppVersion 会被服务端/页面解析——
+  // 低于 3.4.0（WEB_REMOTE_CONTROL_V4_MIN_APP_VERSION）被路由到已下线的 /remote/v3 直接 404（2026-10 实证：
+  // app_version=0.5.21 → 404，3.15.1 → 200）。上报移植目标的协议版本；扩展版本不参与远控协议。
+  const PROTOCOL_APP_VERSION = '3.15.1';
+  // 配对诊断通道：状态轨迹落盘可见（排障定案用；passHash 等凭据严禁进入）
+  const pairingChannel = vscode.window.createOutputChannel('Zcode Pairing');
+  const fmtPairingArgs = (args: unknown[]): string =>
+    args
+      .map((a) => {
+        if (typeof a === 'string') return a;
+        try {
+          return JSON.stringify(a);
+        } catch {
+          return String(a);
+        }
+      })
+      .join(' ');
+  const pairingLogger = {
+    info: (...a: unknown[]) => pairingChannel.appendLine(`[${new Date().toISOString()}] ${fmtPairingArgs(a)}`),
+    warn: (...a: unknown[]) => pairingChannel.appendLine(`[${new Date().toISOString()}] WARN ${fmtPairingArgs(a)}`),
+    error: (...a: unknown[]) => pairingChannel.appendLine(`[${new Date().toISOString()}] ERROR ${fmtPairingArgs(a)}`)
+  };
+
+  // ── 跨窗口配对租约：globalState 仲裁（TTL 过期自愈；手动点击=强制抢占，被抢占窗口 ≤15s 内让位） ──
+  const leaseOwner = randomUUID();
+  let leaseTimer: ReturnType<typeof setInterval> | undefined;
+  const readLease = () => context.globalState.get<{ owner: string; at: number }>(PAIRING_LEASE_KEY);
+  const pairingLock = {
+    acquire(force = false): boolean {
+      const cur = readLease();
+      const mine = cur?.owner === leaseOwner;
+      const expired = !cur || Date.now() - cur.at > PAIRING_LEASE_TTL_MS;
+      if (!force && !mine && !expired) return false;
+      void context.globalState.update(PAIRING_LEASE_KEY, { owner: leaseOwner, at: Date.now() });
+      return true;
+    },
+    startHeartbeat(onLost: () => void): void {
+      if (leaseTimer) clearInterval(leaseTimer);
+      leaseTimer = setInterval(() => {
+        const cur = readLease();
+        if (cur && cur.owner !== leaseOwner && Date.now() - cur.at <= PAIRING_LEASE_TTL_MS) {
+          if (leaseTimer) clearInterval(leaseTimer);
+          leaseTimer = undefined;
+          onLost();
+          return;
+        }
+        void context.globalState.update(PAIRING_LEASE_KEY, { owner: leaseOwner, at: Date.now() });
+      }, PAIRING_LEASE_HEARTBEAT_MS);
+      leaseTimer.unref?.();
+    },
+    release(): void {
+      if (leaseTimer) {
+        clearInterval(leaseTimer);
+        leaseTimer = undefined;
+      }
+      if (readLease()?.owner === leaseOwner) void context.globalState.update(PAIRING_LEASE_KEY, undefined);
+    }
+  };
+
+  const pairing = new PairingController({
+    appVersion: PROTOCOL_APP_VERSION,
+    env: () => env,
+    relayWsUrl: () => cfg().get<string>('remotePairing.relayUrl') || DEFAULT_RELAY_WS_URL,
+    pairingEnabled: () => cfg().get<boolean>('remotePairing.enabled') !== false,
+    serverPath: () => {
+      const configured = cfg().get<string>('serverPath');
+      return configured && configured.trim() ? configured : DEFAULT_SERVER_PATH();
+    },
+    listWorkspaces: () =>
+      (vscode.workspace.workspaceFolders ?? []).map((folder) => ({
+        workspacePath: folder.uri.fsPath,
+        label: folder.name,
+        kind: 'local' as const
+      })),
+    listTasks: () => {
+      // 任务快照来自会话控制层（session/list），busy 会话隐藏——手机端避免与插件双活跃
+      return (controller?.mobileTaskSnapshot() ?? []).filter((task) => task.displayStatus !== 'running');
+    },
+    storage: {
+      // 身份策略（2026-10 实证）：优先复用桌面端 relay 设备身份（同机一体——relay 风控下自注册
+      // 新身份无法被手机配对）；桌面身份缺失才自注册并存 globalState。永不清除/覆盖桌面身份。
+      load: async () => {
+        const desktop = readDesktopRelayIdentity(env.credentialsPath, env.settingPath, env.telemetryStatePath);
+        if (desktop) return desktop;
+        return context.globalState.get<{ deviceMid: string; deviceSid: string; passHash: string }>(PAIRING_AUTH_KEY);
+      },
+      save: async (auth) => {
+        if (readDesktopRelayIdentity(env.credentialsPath, env.settingPath, env.telemetryStatePath)) return;
+        void (await context.globalState.update(PAIRING_AUTH_KEY, auth));
+      },
+      clear: async () => void (await context.globalState.update(PAIRING_AUTH_KEY, undefined))
+    },
+    lock: pairingLock,
+    identityLabel: () => {
+      const desktop = readDesktopRelayIdentity(env.credentialsPath, env.settingPath, env.telemetryStatePath);
+      return desktop ? `配对身份：共享桌面设备（…${desktop.deviceSid.slice(-6)}）` : '配对身份：插件自注册';
+    },
+    push: (msg) => chatProvider.post(msg),
+    logger: pairingLogger
+  });
+  pairing.autoRestore();
 
   function ensureCore(): { srv: ZcodeServer; ctl: SessionController } | null {
     const ws = workspacePath();
@@ -100,7 +215,9 @@ export function activate(context: vscode.ExtensionContext): void {
       onModeChange: (mode) => {
         if (PICKABLE_MODES.has(mode)) void context.globalState.update(LAST_MODE_KEY, mode);
       },
-      onInteractionLog: (line) => srv.logInteraction(line)
+      onInteractionLog: (line) => srv.logInteraction(line),
+      // 手机端任务快照更新 → 经配对通道推送手机首页
+      onSnapshotChanged: () => pairing.notifySnapshotChanged()
     });
     server = srv;
     controller = ctl;
@@ -198,6 +315,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // ── 注册 ──
   context.subscriptions.push(
     quotaMonitor,
+    pairing,
+    pairingChannel,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatProvider, { webviewOptions: { retainContextWhenHidden: true } }),
 
     vscode.commands.registerCommand('zcode.sidebar.open', async () => {
@@ -213,13 +332,15 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('zcode.login', () => startLogin(t, locale)),
     vscode.commands.registerCommand('zcode.logout', () => void runLogout(t)),
     vscode.commands.registerCommand('zcode.openInDesktopApp', () => openDesktopApp(t)),
+    vscode.commands.registerCommand('zcode.pairPhone', () => void pairing.start()),
 
-    // 文件夹变化 → 重建核心
+    // 文件夹变化 → 重建核心 + 手机端工作区快照刷新
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       server?.dispose();
       server = null;
       controller = null;
       chatProvider.post({ kind: 'session-closed' });
+      pairing.notifySnapshotChanged();
       void ensureStarted();
     }),
     // 配置变化 → 重探测环境并重启

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 esbuild、node:fs/path；读取 src/ 与 scripts/ 源码与 media/fonts 字体
- * [OUTPUT]: 产出 out/extension.js、out/webview/*（styles.css 生产态 minify + fonts/）、out/scripts/smoke.js
+ * [OUTPUT]: 产出 out/extension.js、out/webview/*（styles.css 生产态 minify + fonts/）、out/scripts/smoke.js、out/scripts/smoke-relay.js
  * [POS]: 构建脚本，双 target（node 扩展宿主 + 浏览器 webview），全项目唯一构建入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -56,6 +56,45 @@ const smoke = {
   logLevel: 'info'
 };
 
+// ---------- relay 通道冒烟（真连官方 relay，只注册等待不配对） ----------
+const smokeRelay = {
+  entryPoints: [path.join(root, 'scripts/smoke-relay.ts')],
+  bundle: true,
+  outfile: path.join(out, 'scripts/smoke-relay.js'),
+  format: 'cjs',
+  platform: 'node',
+  target: 'node18',
+  external: ['vscode'],
+  sourcemap: false,
+  logLevel: 'info'
+};
+
+// ---------- zcode-server 资产冒烟（spawn + hello 握手 + 存活） ----------
+const smokeServer = {
+  entryPoints: [path.join(root, 'scripts/smoke-server.ts')],
+  bundle: true,
+  outfile: path.join(out, 'scripts/smoke-server.js'),
+  format: 'cjs',
+  platform: 'node',
+  target: 'node18',
+  external: ['vscode'],
+  sourcemap: false,
+  logLevel: 'info'
+};
+
+// ---------- 无手机全链路桥接 harness（手动联调，配合 ZCode 仓库侧终端模拟器） ----------
+const bridgeHarness = {
+  entryPoints: [path.join(root, 'scripts/bridge-harness.ts')],
+  bundle: true,
+  outfile: path.join(out, 'scripts/bridge-harness.js'),
+  format: 'cjs',
+  platform: 'node',
+  target: 'node18',
+  external: ['vscode'],
+  sourcemap: false,
+  logLevel: 'info'
+};
+
 // ---------- 静态资源 ----------
 function copyStatic() {
   const cssSrc = fs.readFileSync(path.join(root, 'src/ui/webview/styles.css'), 'utf8');
@@ -92,6 +131,9 @@ function copyStatic() {
     await esbuild.build(extension);
     await esbuild.build(webview);
     await esbuild.build(smoke);
+    await esbuild.build(smokeRelay);
+    await esbuild.build(smokeServer);
+    await esbuild.build(bridgeHarness);
     copyStatic();
   }
 })().catch((e) => {

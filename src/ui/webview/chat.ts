@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单，含套餐用量弹窗）、./todoPanel（进程面板渲染）、./quotaRings（套餐用量圆环）、./icons、./format
- * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 应用壳 + 桥接消息入口；EventHost/QueueHost/MenuHost 的宿主实现）；含 diff 式 rebuildMessages（快照复用节点 + 流式消息跳过，根治全量重建闪烁）
+ * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 应用壳 + 桥接消息入口；EventHost/QueueHost/MenuHost 的宿主实现）；含 diff 式 rebuildMessages（快照复用节点 + 流式消息跳过，根治全量重建闪烁）与手机配对面板（openPairPanel/renderPairPanel，backdrop 固定弹层 + pair-status 推送原地刷新）
  * [POS]: webview 的中枢——持有全部共享状态，事件适配/交互队列/菜单/进程面板渲染委托给子模块；slash/@ 弹层因需改写输入框文本留在本层
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -11,11 +11,11 @@ import type {
   PermissionRequestParams,
   UserInputRequestParams
 } from '../../protocol/types';
-import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef, QuotaUsagePayload } from '../bridge';
+import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef, QuotaUsagePayload, PairingPanelPayload } from '../bridge';
 import { h, renderMessage, esc, resetToolCollapseState } from './render';
 import type { InteractionDraft } from './interaction';
 import { makeT, type Locale, type Translate } from './i18n';
-import { zLogoEl, modeIconEl, atIconEl, gearIconEl, plusIconEl, clockIconEl } from './icons';
+import { zLogoEl, modeIconEl, atIconEl, gearIconEl, plusIconEl, clockIconEl, phoneIconEl } from './icons';
 import { formatTokens, fmtContext } from './format';
 import { applySessionEvent, normalizeMessageId, type ChatSessionState, type MutableSessionMessage } from './events';
 import { renderPermissionCards } from './queue';
@@ -82,6 +82,11 @@ export class ChatApp {
   previewRegistry = new Map<string, string>();
   pastePending = new Map<string, string>();
   previewEl: HTMLElement | null = null;
+  /** 手机配对面板：宿主 PairingController 推送的最新载荷（面板重开即显，无需等回包） */
+  pairPanel: PairingPanelPayload | null = null;
+  pairEl: HTMLElement | null = null;
+  /** 上次成功渲染的二维码 SVG（starting 态置灰保留，防视觉断裂） */
+  private lastPairSvg: string | null = null;
   ctxBreakdown: { source: string; chars: number }[] | null = null;
   /** 用户关闭的进程面板任务集合（TodoWrite callId，localStorage 持久化——跨会话切换/重载保留；新一轮任务新 callId 自动重现） */
   todoClosedCallIds = loadClosedTodoCallIds();
@@ -502,6 +507,20 @@ export class ChatApp {
         // 弹窗开着时数据到达 → 原地刷新（对标 ctx 弹层的 isOpenFor 补刷）
         if (this.isOpenFor(this.quotaRingBtn)) this.toggleQuotaMenu(true);
         break;
+      case 'pair-status': {
+        const prev = this.pairPanel;
+        const next = msg.data;
+        this.pairPanel = next;
+        // diff 门：内容未变不重渲染（backdrop 整卡重建会重播动画=闪烁根源）
+        if (
+          this.pairEl &&
+          (prev?.status !== next.status || prev?.qrUrl !== next.qrUrl || prev?.message !== next.message ||
+            prev?.identity !== next.identity || (prev?.qrSvg ?? '') !== (next.qrSvg ?? ''))
+        ) {
+          this.renderPairPanel();
+        }
+        break;
+      }
       case 'error':
         this.showError(msg.message);
         break;
@@ -1129,6 +1148,77 @@ export class ChatApp {
   private closePreview(): void {
     this.previewEl?.remove();
     this.previewEl = null;
+  }
+
+  // ═══════════════ 手机配对面板（backdrop 固定弹层，openPreview 同款模式） ═══════════════
+
+  /** 打开配对面板并请求宿主回推当前状态（常驻连接下通常已有缓存即时可显） */
+  openPairPanel(): void {
+    this.closePairPanel();
+    this.post({ kind: 'pair-phone' });
+    this.renderPairPanel();
+  }
+
+  private closePairPanel(): void {
+    this.pairEl?.remove();
+    this.pairEl = null;
+  }
+
+  private renderPairPanel(): void {
+    this.closePairPanel();
+    const p = this.pairPanel;
+    const status = p?.status ?? 'starting';
+    const statusLabel =
+      status === 'waiting' ? this.t('pairWaiting')
+      : status === 'active' ? this.t('pairActive')
+      : status === 'error' ? this.t('pairError')
+      : status === 'idle' ? this.t('pairStopped')
+      : this.t('pairStarting');
+    const box = h('div', { class: 'preview-backdrop pair-backdrop' });
+    (box as HTMLElement).addEventListener('click', () => this.closePairPanel());
+    const card = h('div', { class: 'pair-card' });
+    (card as HTMLElement).addEventListener('click', (e) => e.stopPropagation());
+
+    const head = h('div', { class: 'pair-head' }, phoneIconEl(), h('span', {}, this.t('pairTitle')));
+    const stateRow = h('div', { class: `pair-state ${status}` },
+      h('span', { class: 'pair-dot' }),
+      h('span', {}, statusLabel)
+    );
+    const qrBox = h('div', { class: 'pair-qr' });
+    // starting（重连中）保留上次二维码置灰显示——QR→"…"→QR 的来回替换就是肉眼闪烁
+    if (p?.qrSvg) {
+      this.lastPairSvg = p.qrSvg;
+    }
+    const svg = p?.qrSvg ?? (status === 'starting' ? this.lastPairSvg : null);
+    if (svg) {
+      qrBox.innerHTML = svg;
+      if (!p?.qrSvg) qrBox.classList.add('stale');
+    } else if (status === 'starting' || status === 'waiting') {
+      qrBox.append(h('div', { class: 'pair-qr-pending' }, '…'));
+    }
+    if (p?.message) {
+      stateRow.append(h('div', { class: 'pair-message' }, p.message));
+    }
+    const hint = h('div', { class: 'pair-hint' }, this.t('pairHint'));
+    const busyHint = h('div', { class: 'pair-hint sub' }, this.t('pairBusyHint'));
+    const identityHint = p?.identity ? h('div', { class: 'pair-hint sub' }, p.identity) : null;
+    const actions = h('div', { class: 'pair-actions' });
+    if (p?.qrUrl) {
+      actions.append(h('button', { class: 'pair-btn', onclick: () => this.post({ kind: 'pair-copy-link', url: p.qrUrl! }) }, this.t('pairCopyLink')));
+    }
+    actions.append(h('button', { class: 'pair-btn', onclick: () => this.post({ kind: 'pair-refresh' }) }, this.t('pairRefresh')));
+    actions.append(
+      status === 'idle'
+        ? h('button', { class: 'pair-btn primary', onclick: () => this.post({ kind: 'pair-phone' }) }, this.t('pairPhone'))
+        : h('button', { class: 'pair-btn', onclick: () => this.post({ kind: 'pair-stop' }) }, this.t('pairStop'))
+    );
+    const close = h('button', { class: 'preview-close', title: this.t('cancel') }, '×');
+    (close as HTMLElement).addEventListener('click', (e) => { e.stopPropagation(); this.closePairPanel(); });
+
+    card.append(head, stateRow, qrBox, hint, busyHint, ...(identityHint ? [identityHint] : []), actions);
+    box.append(card, close);
+    this.root.append(box);
+    this.pairEl = box;
   }
 
   private isNearBottom(): boolean {

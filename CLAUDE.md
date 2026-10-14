@@ -2,14 +2,15 @@
 
 > AI 工作规范与文档库入口见 AGENTS.md；本文件是 GEB 代码地图 L1（项目宪法）。
 
-TypeScript + VSCode Extension API + esbuild + marked
+TypeScript + VSCode Extension API + esbuild + marked + ws（relay 设备通道）+ qrcode（配对二维码 SVG）
 
 <directory>
-src/ - 扩展源码 (4子目录: protocol, ui, ui/webview, 其余为根级模块)
+src/ - 扩展源码 (5子目录: protocol, remote, ui, ui/webview, 其余为根级模块)
 src/protocol/ - ZCode app-server 协议层：NDJSON JSON-RPC 客户端与全部类型契约
+src/remote/ - 手机远控协议层：官方 relay 设备通道（注册/配对/心跳）+ rpc-frame 编解码/ACK 可靠传输 + 本地 zcode-server stdio 桥 + 配对编排（vscode 无关，可 node 直跑冒烟）
 src/ui/ - 视图宿主：聊天视图的 WebviewViewProvider（会话历史内嵌于聊天头部时钟按钮）
 src/ui/webview/ - webview 前端：应用壳(chat.ts) + 事件适配(events) + 交互队列(queue) + 菜单(menus) + 渲染/交互卡/图标/格式化/i18n/markdown
-scripts/ - 冒烟测试（协议回归，`npm run smoke`）、UI 验收（`npm run ui-preview`：服务+开浏览器，四主题/三栏对比/`?theme=` 深链）与视觉级联回归（`npm run theme-check`：CSS 块序 + computed tokens 四主题互异 + dark+hc 并存 HC 胜出 + 字体子集懒加载 + 深链 + CSP 'unsafe-inline' 看守，无浏览器时降级静态断言；preview-server.mjs 为共享静态服务；ui-live.html 真实产物驱动页支持 `?csp=strict|fixed` 复现 webview CSP 环境）
+scripts/ - 冒烟测试（协议回归 `npm run smoke`；relay 通道注册/心跳 `npm run smoke:relay` 真连官方 relay 只注册不配对）、UI 验收（`npm run ui-preview`：服务+开浏览器，四主题/三栏对比/`?theme=` 深链）与视觉级联回归（`npm run theme-check`：CSS 块序 + computed tokens 四主题互异 + dark+hc 并存 HC 胜出 + 字体子集懒加载 + 深链 + CSP 'unsafe-inline' 看守，无浏览器时降级静态断言；preview-server.mjs 为共享静态服务；ui-live.html 真实产物驱动页支持 `?csp=strict|fixed` 复现 webview CSP 环境）
 media/ - 图标资源（zcode-icon.png=欢迎页官方原图（桌面端 icon.png 原样拷贝，body[data-logo] 注入 webview）；zcode.svg=官方 Z 标复刻的侧栏图标；icon.png=市场 128px；zcode-sessions.svg 备用；fonts/=Inter 可变字重五子集 latin/latin-ext/cyrillic/cyrillic-ext/greek）
 out/ - 构建产物（esbuild 双 target + styles.css + fonts/，git 忽略）
 docs/ - 项目知识库（AI 友好 Docs 标准：00-context~99-archive 十一目录；AI 工作规范入口见 AGENTS.md，与 GEB 代码地图并存——docs:check/ai:check 守护）
@@ -83,3 +84,19 @@ LICENSE - MIT
 - **ExitPlanMode 计划审批走 requestUserInput 不走权限通道（bundle+日志实证，0.5.16 排障）**：CLI 交互分流器 `toolName===AskUserQuestion?yuc : ExitPlanMode?vuc : guc`——ExitPlanMode 的批准是 `interaction/requestUserInput` 单题卡：`{question:"Review this implementation plan.", header:"Plan", options:[{value:"approve", label:"Approve", description:"Exit plan mode and start implementation."}]}`，`schema:{interaction:"plan_approval", toolName}`。**应答值必须归一为字面 `approve`**（xuc 严格 `===`，其他非空串→deny(reason=该串)，空→无理由 deny），读取路径 `answers[问题文本] ?? answer_0 ?? answer`——插件 buildUserInputContent 三路全中勿回退。`planEnabled` 是会话能力旗标（与 mode 独立，create 时可为 true），会让 Zho 守门放行**非 plan 模式**的 ExitPlanMode（mode=build 也能调）；deny 后 stop reason=`plan_exit_denied`，工具错误文案=默认 `Permission denied for ExitPlanMode`。**CLI requestClient 无超时**（reannounce 1s 指数退避无限等）——deny 必然来自显式应答，宿主 `stop()`/会话切换的 dropPendingInteractions 自动 decline（`{action:'decline', reason:'session closed'}`）是隐形拒绝源（本次事故主嫌：用户点确认/插队触发 stop 连带拒绝挂着的计划审批）。排障先查 `~/.zcode/cli/log/zcode-<date>.jsonl`（tool.permission.resolved 的 ruleId/mode/status + "session/send rejected: active prompt exists"）与 "Zcode Protocol" OutputChannel
 
 法则: 极简·稳定·导航·版本精确
+
+## 手机远控（路 A：插件自为 relay device，逆向自 ZCode v3.15.1 源码仓库，2026-10 实证）
+
+- **架构**：手机官方页面（zcode.z.ai/remote/v4 云端静态 UI）⇄ 官方 relay（wss://zcode.z.ai/ws，纯转发不存数据）⇄ 插件（device 角色）⇄ 本地 zcode-server.cjs（stdio 全 services 栈，agent 在本机执行）。手机是遥控器，会话数据永在本机。
+- **relay 握手**：URL 必带 `?mid=<deviceMid>` + header `X-Device-ID`（边缘层按 query.mid 分片路由，单靠 header 两端会落不同后端）；`device_register_init{device_mid,pass_hash,meta}` → ack 得 `device_sid` → `auth_init(role:device)` → `auth_challenge{nonce}` → `auth_response{proof}` → `pair_status waiting|matched`；proof = `HMAC-SHA256(passHash, "nonce|device|deviceSid")` base64url，passHash = `sha256(password)` **base64**（非 url 变体，与 proof 不同勿混）。注册无需账号。心跳 `pair_status_query` 10s±2s jitter、ACK watchdog 30s；已配对后偶发 waiting 先入 15s 怀疑态再重连（防抖）；KICKED=新手机顶替（重连非终止）；AUTH_FAILED(persisted) 一次性降级 register 重试。
+- **relay 实测行为（2026-10 联调实证，源码无此描述）**：① 设备 deviceMid 官方是 **UUID 带连字符**（telemetry-state.json 的 deviceMid），自定义格式注册能成功但终端配对始终 AUTH_FAILED（无挑战直拒）——设备身份生成应使用 UUID 格式；② **防爆破冷却**：一次终端配对失败后，同 IP/身份的后续认证（含设备注册）会 AUTH_FAILED 约 10-20 分钟——联调时不要高频重试；③ 桌面端 relay 身份持久化在 `~/.zcode/v2/setting.json`（webRemoteControlExternalRelayDevice.deviceSid）+ credentials.json（`web-remote-control:external-relay:pass_hash`，enc:v1 可解）。
+- **app_version 语义（0.5.22 定案，手机"连接不可用"根因）**：QR URL 的 `app_version` 与 bootstrap 的 `desktopAppVersion` 是**服务端/页面路由参数**，不是展示信息——低于 3.4.0 被路由到已下线的 `/remote/v3` 直接 **404**（实证：`?app_version=0.5.21` → 404，`3.15.1` → 200；`/remote`、`/remote/v3` 现均 404，唯 `/remote/v4` 存活）。页面的版本守卫还会在 bootstrap 后比对两者、不一致即改写 URL 导航——两处必须一致且 ≥3.4.0。**插件统一上报协议契约版本 `PROTOCOL_APP_VERSION='3.15.1'`**（移植目标的协议版本，extension.ts），扩展自身版本严禁进入远控协议字段。
+- **配对身份策略（决定性实证）**：relay 风控下**自注册的新设备身份无法被手机配对**（官方页面 challenge 后 AUTH_FAILED 或直拒），而**桌面端已存在的身份完全可用**（同一身份经本插件 transport → 官方页面 matched → bridge → rpc-frame 双向流动全通）。故插件身份 = **复用桌面身份优先**（credentials.ts:readDesktopRelayIdentity 三件套 deviceMid/deviceSid/passHash），桌面身份缺失才自注册（globalState 自管）。边界：与桌面端共享同一设备身份——两端远控同时在线会互踢（同一 sid 的设备连接竞争），文档已提示用户。
+- **同身份互踢的工程对策（0.5.20→0.5.21，双 bug 实证：面板频繁闪烁 + 手机扫码"连接不可用"）**：① **跨窗口租约**（extension.ts globalState `zcode.remotePairing.lease`，TTL 45s/心跳 15s；autoRestore 非强制获取、手动点击强制抢占、被抢占窗口心跳发现后静默让位）；② **互踢风暴探测→停战**（relayTransport 60s 内 ≥5 次重连报错一次；pairingManager 收到后 dispose transport 停止战争，错误状态驻留待用户重新发起——只报错不停战闪烁不会停）；③ **面板防闪烁**：二维码 URL 按身份缓存（t 不随状态推送重生成）+ PairingController.handleStatus diff 门（面板内容未变不推）+ webview pair-status diff 门（未变不重渲染——backdrop 整卡重建会重播动画即闪烁）+ **3 秒断开宽限**（0.5.21 补移植桌面 MOBILE_DISCONNECT_STATUS_GRACE_MS：relay 对残留 terminal 的 matched/waiting 抖动不降级不重渲染——上一版遗漏的闪烁主因之一）+ **starting 态保留上次二维码置灰**（QR→"…"→QR 替换本身就是闪烁）；④ **「Zcode Pairing」OutputChannel**（extension.ts，状态轨迹落盘，排障定案用；凭据严禁进入）。
+- **二维码 URL**：`https://zcode.z.ai/remote/v4?sid&hash&t&mid&name&app_version`；手机页对 app_version 只改写不拒绝（无版本硬门槛）。
+- **配对后数据面**：`{type:"data",payload}` 承载 `zcode_type` 判别的应用载荷（bootstrap/workspace-list/bridge-open/platform-request/mobile-view-state…）；`workspace-bridge-open` → 设备端起 bridge → `rpc-frame`/`rpc-frame-ack`（base64 VSBuffer 分帧：seq 物理序/messageSeq 逻辑序/crc32 校验/≤64 分片/消息 ≤16MiB/物理帧 ≤1MiB）隧道手机 ChannelClient ↔ 设备端。**bridge-ready 必须先进普通 app 传输才允许 raw 帧开闸**；断线窗口出向响应缓冲 50 条/5s；ACK 通道重放缓冲 8MiB、45s 宽限、1MiB/256KiB 高低水位流控。
+- **本地 zcode-server 桥**：`spawn node zcode-server.cjs`（资产约定 `~/.zcode/vscode-remote/zcode-server.cjs`，配置 `zcode.serverPath` 覆盖）→ stdout 一行 `zcode-hello` JSON → 回 `zcode-hello-ack` → 之后全部字节为 13 字节帧头（type(1)=Regular|id(4)|ack(4)|length(4) 大端）+ body；帧载荷与 relay rpc-frame 同源（ChannelClient/Server 线格式），插件做纯字节二传。stderr 是日志仅转发。
+- **会话互通（SQLite 事实）**：agent 会话存 `~/.zcode/cli/db/db.sqlite`（session/message/part 表，**非 JSONL**——Claude Code 的 projects/*.jsonl 布局在此只作导入源）；tasks 索引 `~/.zcode/v2/tasks-index.sqlite`，taskId≡agent sessionId。插件 app-server 与 zcode-server 同 HOME + 同 cwd → 同一 store；手机打开工作区后 services 的 TaskIndexSyncer 按 agent `sessions-index` topic 播种共享 store 全部会话（不分创建者）→ **插件已有会话自动出现在手机任务列表并可 resume，反向同理**。
+- **并发边界（无跨进程会话所有权）**：同一会话两端同时发消息 → SQLite 串行化写但内存运行时分叉；v1 缓解 = 手机首页快照过滤 busy 会话（extension 装配层 displayStatus!=='running'）+ 面板文案提醒，真互斥未做勿宣称。
+- **安全**：passHash 等价配对口令（二维码明文携带），只进 globalState（key `zcode.remotePairing.auth`）与协议字段，严禁日志；relay 域 zcode.z.ai 是唯一新增外联目的地。
+- 移植源对照：桌面 `webRemoteControlTransport`（transport 状态机）、`@zcode/client` acknowledged relay protocol（ACK 通道）、shared rpc-transport（分帧 codec）——本仓库对应 src/remote/{relayTransport,ackRelayProtocol,rpcFrameCodec}.ts，语义逐条对齐含官方 Bugfix 注释的坑。

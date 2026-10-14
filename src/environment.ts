@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 node:fs/path/os/child_process/crypto，读取 package.json 配置项
- * [OUTPUT]: 对外提供 ZcodeEnvironment 解析（CLI/配置路径/node 回退/内置 revision 指纹）
+ * [OUTPUT]: 对外提供 ZcodeEnvironment 解析（CLI/配置/凭据/telemetry 路径、node 回退、内置 revision 指纹）
  * [POS]: 环境探测层（仅 macOS），被 extension.ts / account.ts / serverManager.ts / scripts/smoke.ts 消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -21,6 +21,8 @@ export interface ZcodeEnvironment {
   personalConfigPath: string;
   credentialsPath: string;
   settingPath: string;
+  /** telemetry 设备身份文件（deviceMid）——手机配对复用桌面设备身份的组成部分 */
+  telemetryStatePath: string;
   /** node 可执行文件与附加环境（ELECTRON_RUN_AS_NODE 回退时非空） */
   nodeCommand: string;
   nodeExtraEnv: Record<string, string>;
@@ -79,6 +81,7 @@ export function resolveEnvironment(overrides: EnvironmentOverrides = {}): ZcodeE
   const personalConfigPath = path.join(v2, 'provider_config.json');
   const credentialsPath = path.join(v2, 'credentials.json');
   const settingPath = path.join(v2, 'setting.json');
+  const telemetryStatePath = path.join(v2, 'telemetry-state.json');
 
   const exists = (p: string) => {
     try {
@@ -97,6 +100,7 @@ export function resolveEnvironment(overrides: EnvironmentOverrides = {}): ZcodeE
     personalConfigPath,
     credentialsPath,
     settingPath,
+    telemetryStatePath,
     nodeCommand: node.command,
     nodeExtraEnv: node.extraEnv,
     builtinRevision: exists(builtinConfigPath) ? computeBuiltinRevision(builtinConfigPath) : null,

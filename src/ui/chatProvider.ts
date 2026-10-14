@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 vscode，消费 ../sessionController、./bridge、../environment、../account
- * [OUTPUT]: 对外提供 ChatViewProvider（右侧栏聊天视图宿主）；send/set-model 桥接处理后经 onRefreshQuota 显式触发套餐用量刷新（新 key 的额度要跟上）
+ * [INPUT]: 依赖 vscode，消费 ../sessionController、./bridge、../environment、../account、../pairingController（懒引用）
+ * [OUTPUT]: 对外提供 ChatViewProvider（右侧栏聊天视图宿主）；send/set-model 桥接处理后经 onRefreshQuota 显式触发套餐用量刷新（新 key 的额度要跟上）；pair-* 消息路由到宿主 PairingController
  * [POS]: ui 的聊天视图提供者，extension.ts 注册；与 webview/main.ts 通过 bridge 契约通信
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -16,6 +16,7 @@ import type { ZcodeEnvironment } from '../environment';
 import type { AccountStatus } from '../account';
 import type { SessionMode } from '../protocol/types';
 import type { Locale } from '../i18n';
+import type { PairingController } from '../pairingController';
 
 /** 常见扩展名 → MIME（附件内联用） */
 const ATTACH_MIME: Record<string, string> = {
@@ -39,6 +40,8 @@ export interface ChatViewHost {
   onOpenDesktop: () => void;
   /** 显式触发套餐用量刷新（发送消息/切换模型后——新 key 的额度要跟上） */
   onRefreshQuota: () => void;
+  /** 手机配对控制器（懒引用——extension.ts 在 chatProvider 之后构造） */
+  pairing: () => PairingController | null;
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -234,6 +237,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.post({ kind: 'show-preview', data: { name: msg.name, mime: msg.mime ?? '', dataUrl: msg.dataUrl ?? '' } });
           break;
         }
+        case 'pair-phone':
+          await this.host.pairing()?.start();
+          break;
+        case 'pair-stop':
+          await this.host.pairing()?.stop();
+          break;
+        case 'pair-refresh':
+          await this.host.pairing()?.refresh();
+          break;
+        case 'pair-copy-link':
+          await this.host.pairing()?.copyLink(msg.url);
+          break;
       }
     } catch (e) {
       this.post({ kind: 'error', message: e instanceof Error ? e.message : String(e) });

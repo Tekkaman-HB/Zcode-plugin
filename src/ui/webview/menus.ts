@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../bridge 的 FromWebviewMessage、../../protocol/types、./render 的 h()/relTime()、./icons 的 MODE_ICONS、./format、./events 的 ChatSessionState、./i18n
- * [OUTPUT]: 对外提供 MenuHost 接口与 MenuController（弹层菜单控制器：模型/上下文/套餐用量/齿轮/模式/历史会话菜单 + popup 定位设施与 composer 弹层按键导航）
+ * [OUTPUT]: 对外提供 MenuHost 接口与 MenuController（弹层菜单控制器：模型/上下文/套餐用量/齿轮/模式/历史会话菜单 + popup 定位设施与 composer 弹层按键导航；齿轮菜单含「手机配对」入口→宿主 openPairPanel）
  * [POS]: webview 的菜单层——popup 类菜单的唯一居所；chat.ts 构建并委托，斜杠/@ 弹层因需改写输入框文本留在 chat.ts（经 public showPopup 共用定位设施）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -32,6 +32,8 @@ export interface MenuHost {
   quotaPayload: QuotaUsagePayload | null;
   composerInput: HTMLTextAreaElement;
   post(msg: FromWebviewMessage): void;
+  /** 打开手机配对面板（面板本体在 chat.ts，菜单只负责入口） */
+  openPairPanel(): void;
   optimisticSetModel(providerId: string, modelId: string, reasoningLevel?: string): void;
   /** 权威上下文窗口：当前模型在 available（配置权威列表）里的值；投影里的 200K 是降级值不可信 */
   authoritativeWindow(): number;
@@ -309,6 +311,7 @@ export class MenuController {
     if (host.serverState === 'failed') {
       item(host.t('retry'), () => host.post({ kind: 'retry-server' }));
     }
+    item(host.t('pairPhone'), () => host.openPairPanel());
     item(host.t('mcpServers'), () => {
       host.mcpServers = null;
       this.showPopup(host.gearBtn, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, '…')));

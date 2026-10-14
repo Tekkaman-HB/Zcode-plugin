@@ -103,7 +103,19 @@ const strings = {
     quotaWeekly: '每周',
     quotaUsed: '已用 {pct}%',
     quotaResetsIn: '{t}后重置',
-    quotaPlanUsage: '套餐用量'
+    quotaPlanUsage: '套餐用量',
+    pairPhone: '手机配对',
+    pairTitle: 'ZCode 手机配对',
+    pairStarting: '正在连接配对服务…',
+    pairWaiting: '等待手机扫码配对',
+    pairActive: '手机已连接',
+    pairError: '配对服务异常',
+    pairRefresh: '刷新配对',
+    pairStop: '停止',
+    pairCopyLink: '复制链接',
+    pairHint: '用 ZCode 手机 App 或手机浏览器扫描二维码，即可远程操控本工作区',
+    pairBusyHint: '注意：同一会话请勿在手机与插件两端同时发送消息',
+    pairStopped: '手机配对已停止'
   },
   'en-US': {
     appTitle: 'ZCode',
@@ -201,7 +213,19 @@ const strings = {
     quotaWeekly: 'Weekly',
     quotaUsed: '{pct}% used',
     quotaResetsIn: 'resets in {t}',
-    quotaPlanUsage: 'Plan usage'
+    quotaPlanUsage: 'Plan usage',
+    pairPhone: 'Pair phone',
+    pairTitle: 'ZCode Phone Pairing',
+    pairStarting: 'Connecting to relay…',
+    pairWaiting: 'Waiting for phone to scan',
+    pairActive: 'Phone connected',
+    pairError: 'Relay error',
+    pairRefresh: 'Refresh pairing',
+    pairStop: 'Stop',
+    pairCopyLink: 'Copy link',
+    pairHint: 'Scan with the ZCode mobile app or a phone browser to control this workspace remotely',
+    pairBusyHint: 'Note: avoid sending messages on both phone and plugin for the same session',
+    pairStopped: 'Phone pairing stopped'
   }
 } as const;
 

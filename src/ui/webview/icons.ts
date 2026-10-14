@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无依赖（仅 DOM API；官方原图 URI 由 chatProvider 生成的 body[data-logo] 注入）
- * [OUTPUT]: 对外提供 MODE_ICONS 图标表与 zLogoEl/modeIconEl/atIconEl/gearIconEl/plusIconEl/clockIconEl 图标元素工厂
+ * [OUTPUT]: 对外提供 MODE_ICONS 图标表与 zLogoEl/modeIconEl/atIconEl/gearIconEl/plusIconEl/clockIconEl/phoneIconEl 图标元素工厂
  * [POS]: webview 图标层（官方原图 img + 内联 SVG），chat.ts（chip/标题栏/欢迎页）与 menus.ts（模式菜单）消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -69,5 +69,13 @@ export function clockIconEl(): HTMLElement {
   const span = document.createElement('span');
   span.className = 'icon-svg';
   span.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.6V8l2.3 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  return span;
+}
+
+/** 手机图标（手机配对入口，随 currentColor 主题着色） */
+export function phoneIconEl(): HTMLElement {
+  const span = document.createElement('span');
+  span.className = 'icon-svg';
+  span.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4.5" y="1.8" width="7" height="12.4" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M7 12h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
   return span;
 }
