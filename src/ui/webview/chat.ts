@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费协议/bridge 契约、./events、./queue；委托 ./shell、./changes、./composer、./panels、./menus、./todoPanel、./quotaRings 与 ./render
- * [OUTPUT]: ChatApp 共享状态与桥接入口；按会话 id 分发 diff 汇总并在切换时清空旧摘要、流式分块 Markdown/工具复用、首响等待/空态同步、ready 发送和滚动跟随
+ * [OUTPUT]: ChatApp 共享状态与桥接入口；按会话 id 分发 diff 汇总并在切换时清空旧摘要、流式分块 Markdown/工具复用、消息完成边界校准思考用时、首响等待/空态同步、ready 发送和滚动跟随；MCP 清单保留未连接/未知项
  * [POS]: webview 中枢与各 Host 接口的实现者；布局、输入、模态和菜单分别由子模块负责
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -11,7 +11,7 @@ import type {
   PermissionRequestParams,
   UserInputRequestParams
 } from '../../protocol/types';
-import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef, QuotaUsagePayload, PairingPanelPayload } from '../bridge';
+import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef, QuotaUsagePayload, PairingPanelPayload, McpServerEntry } from '../bridge';
 import { h, renderMessage, resetToolCollapseState, isSystemReminderText, updateStreamingText } from './render';
 import type { InteractionDraft } from './interaction';
 import { makeT, type Locale, type Translate } from './i18n';
@@ -141,7 +141,7 @@ export class ChatApp {
   dirEntries: { dir: string; entries: DirEntry[] } | null = null;
   currentAssistantId: string | null = null;
   mcp: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } | null = null;
-  mcpServers: { name: string; pid: number; source: string }[] | null = null;
+  mcpServers: McpServerEntry[] | null = null;
   private menus!: MenuController;
 
   constructor() {
@@ -387,10 +387,6 @@ export class ChatApp {
       }
       case 'mcp-servers': {
         this.mcpServers = msg.data.servers;
-        if (this.isOpenFor(this.gearBtn) && !this.mcpServers.length) {
-          this.hidePopup();
-          break;
-        }
         if (this.isOpenFor(this.gearBtn)) this.renderMcpMenu();
         break;
       }
@@ -541,6 +537,7 @@ export class ChatApp {
    * 回合结束后的 refresh-messages 进行完整 Markdown 校准。
    */
   private updateMessageIncrementally(node: HTMLElement, m: MutableSessionMessage): boolean {
+    if ((m.info.time as { completed?: number } | undefined)?.completed !== undefined) return false; // 完成边界到达后按落档重建。
     for (const p of m.parts) {
       const pid = (p as { partId?: string }).partId;
       if (!pid) continue;
@@ -561,7 +558,6 @@ export class ChatApp {
     }
     return true;
   }
-
   /** 按插入序追加（事件到达顺序即会话顺序） */
   private insertMessageNode(node: HTMLElement, id: string): void {
     // 权限/输入卡片固定在流末尾之前
@@ -590,7 +586,7 @@ export class ChatApp {
         this.rendered.set(id, snap);
         continue;
       }
-      const skipStreaming = streaming && id === this.currentAssistantId && el !== null;
+      const skipStreaming = streaming && id === this.currentAssistantId && el !== null && (m.info.time as { completed?: number } | undefined)?.completed === undefined;
       if (!skipStreaming && (!el || this.rendered.get(id) !== snap)) {
         const node = renderMessage(m as unknown as SessionMessage, this.t, (name, url, isImg) => this.onAttachmentClick(name, url, isImg), { live: streaming && id === this.currentAssistantId });
         if (node && el) {

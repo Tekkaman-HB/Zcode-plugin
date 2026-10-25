@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约、./remote 的 RelayTaskTarget 类型
  * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；onBeforeSend 等待实际发送基线、onSendRejected 撤销基线、onSessionEvent 在当前会话 UI 过滤前提供实时事件；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）；setMode 受理后主动回推 webview state-updated patch（模式芯片即时归位，不依赖 CLI 广播）；交互生命周期留痕（onInteractionLog → serverManager OutputChannel）与失效自卫（dropPendingInteractions 撤回时回发 interactions-dropped 清 webview 交互卡；对已失效请求的应答显式回执 error 提示而非静默吞掉）；手机端任务快照（mobileTasks 缓存 + refreshMobileTaskSnapshot 翻译 session/list、busy 会话标 running——回合结束/新建会话时刷新，onSnapshotChanged 通知宿主推手机）
+ * [OUTPUT]: fetchMcpServers 合并配置名称与实时进程，补齐未连接项、按原始服务 id 去重；HTTP 状态保留未知
  * [POS]: 会话控制层——extension.ts 与 UI Provider 之间的业务中枢
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -20,7 +21,7 @@ import type {
 import { asSessionEvent, asStateUpdated } from './protocol/types';
 import { ZcodeServer } from './serverManager';
 import { makeT, detectLocale } from './i18n';
-import type { ToWebviewMessage, SessionSnapshotPayload } from './ui/bridge';
+import type { ToWebviewMessage, SessionSnapshotPayload, McpServerEntry } from './ui/bridge';
 import type { RelayTaskTarget } from './remote';
 
 export interface SessionControllerCallbacks {
@@ -288,14 +289,25 @@ export class SessionController {
     return result;
   }
 
-  /** MCP 在跑进程清单（名称真相源：mcp/list 只报 workspace 池不可用） */
-  async fetchMcpServers(): Promise<{ name: string; pid: number; source: string }[]> {
+  /** 清单补齐退出的 stdio 服务；mcp/list 仅消费名称/传输，绝不采用 workspace 池状态。 */
+  async fetchMcpServers(): Promise<McpServerEntry[]> {
+    const workspacePath = this.workspaceRef ?? this.server.workspacePath;
+    const inventory = await this.server.request<{ statuses?: Record<string, { transport?: string }> }>('mcp/list', {
+      workspace: { workspacePath, workspaceKey: workspacePath }, mode: 'status'
+    }, 15_000);
+    // status 模式只读配置，不初始化 workspace 连接池；随后读取会话实际拥有的进程。
     const result = await this.server.request<{ processes?: { pid: number; serverName: string; mcpSource: string; pluginName?: string }[] }>('process/childProcesses', {}, 15_000);
-    return (result.processes ?? []).map((pr) => ({
-      name: pr.pluginName ?? pr.serverName,
-      pid: pr.pid,
-      source: pr.mcpSource
-    }));
+    const servers = new Map<string, McpServerEntry>();
+    for (const pr of result.processes ?? []) {
+      servers.set(pr.serverName, { name: pr.pluginName ?? pr.serverName, pid: pr.pid, source: pr.mcpSource, connected: true });
+    }
+    for (const [id, config] of Object.entries(inventory.statuses ?? {})) {
+      if (servers.has(id)) continue;
+      const pluginName = id.startsWith('plugin:') ? id.split(':')[1] : undefined;
+      servers.set(id, { name: pluginName ?? id, source: pluginName ? 'builtin' : 'custom',
+        connected: config.transport === 'stdio' ? false : null });
+    }
+    return [...servers.values()];
   }
 
   /** 订阅活流（desktop-continuous），并将 backlog 事件回放进 UI 流 */

@@ -3,7 +3,7 @@
 
 ## 成员清单
 
-bridge.ts: 扩展↔webview 纯类型消息契约（SessionChangesPayload/session-changes/review-changes；携带会话 id、ready/missing/partial/error 完整性状态和 preparing 暂态；interactions-dropped 清交互卡）
+bridge.ts: 扩展↔webview 纯类型消息契约（McpServerEntry：可选 pid，connected true/false/null 区分连接/未连接/未知）（SessionChangesPayload/session-changes/review-changes；携带会话 id、ready/missing/partial/error 完整性状态和 preparing 暂态；interactions-dropped 清交互卡）
 gitChanges.ts: SnapshotStore 私有 Git 对象库；原项目只读列路径，私有独立索引/对象捕获文件、计算差异和三方合并、读取原始字节/大小，排除保护目录/gitignore，无过滤器/外部 diff，不写项目 Git
 sessionChanges.ts: SessionChanges 会话差异唯一状态源；按工作区+会话持久化，实际发送前基线/工具检查点/实时结束事件归属，中间检查点落盘供中断恢复；多轮合并，外部保存/重叠/冲突/断档标部分或不可用，旧会话不回退 HEAD
 changeReview.ts: 原生多文件 diff 展示适配；订阅 SessionChanges 推送摘要，vscode.changes 一次打开当前会话全部文件；随侧栏释放订阅

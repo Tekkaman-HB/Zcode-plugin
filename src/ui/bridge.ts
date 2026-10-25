@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无运行时依赖，消费 ../protocol/types 的协议类型
- * [OUTPUT]: ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload / PairingPanelPayload / SessionChangesPayload；含会话归属/完整性状态、摘要和审查入口
+ * [OUTPUT]: ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload / PairingPanelPayload / SessionChangesPayload；含会话归属/完整性状态、摘要和审查入口，以及 McpServerEntry 的可选 pid/三态连接
  * [POS]: ui 的桥接类型层，extension 侧与 webview 侧共同消费，保证两端契约同构
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -104,6 +104,14 @@ export interface SessionChangesPayload {
   binary: number;
 }
 
+/** MCP 清单：本地进程可判定连接；远程传输缺少会话级状态，保留未知。 */
+export interface McpServerEntry {
+  name: string;
+  pid?: number;
+  source: string;
+  connected: boolean | null;
+}
+
 export type ToWebviewMessage =
   | { kind: 'session-changes'; data: SessionChangesPayload }
   | { kind: 'bootstrap'; data: BootstrapPayload }
@@ -121,7 +129,7 @@ export type ToWebviewMessage =
   | { kind: 'mcp-progress'; data: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } }
   | { kind: 'queued-update'; data: { queued: number; items?: { id: string; content: string }[] } }
   | { kind: 'optimistic-user'; data: OptimisticUser }
-  | { kind: 'mcp-servers'; data: { running: boolean; servers: { name: string; pid: number; source: string }[] } }
+  | { kind: 'mcp-servers'; data: { running: boolean; servers: McpServerEntry[] } }
   | { kind: 'quota-usage'; data: QuotaUsagePayload | null }
   | { kind: 'attachments-picked'; data: { attachments: AttachmentRef[] } }
   | { kind: 'files-list'; data: { dir: string; entries: DirEntry[] } }

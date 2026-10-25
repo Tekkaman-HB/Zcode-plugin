@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../../protocol/types、./markdown、./format、./i18n、./icons 与 ./clipboard；流式活性由 chat.ts 传入
- * [OUTPUT]: DOM/消息/部件/diff 渲染器、processingLabel、updateStreamingText 与 renderPendingResponse；纯工具消息紧凑排列，过滤空文本/回合边界，工具图标按 Codex 语义分流
+ * [OUTPUT]: DOM/消息/部件/diff 渲染器、processingLabel、updateStreamingText 与 renderPendingResponse；纯工具消息紧凑排列，过滤空文本/回合边界；思考落档显示服务端固定用时，工具图标按 Codex 语义分流
  * [POS]: webview 渲染层；保存工具展开与流式尾块缓存，chat.ts 持有会话状态；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -15,7 +15,7 @@ import type {
   TimelinePart
 } from '../../protocol/types';
 import { renderMarkdown, splitStreamingMarkdown } from './markdown';
-import { normalizeToolOutputText } from './format';
+import { formatElapsedTime, normalizeToolOutputText } from './format';
 import type { Translate } from './i18n';
 import { iconEl } from './icons';
 import { copyButton } from './clipboard';
@@ -369,6 +369,7 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
   }
 
   // assistant / system：按部件顺序渲染；尾部件继承消息的流式活性（推理块据此切换动态/存档摘要）
+  const elapsed = formatElapsedTime(msg.info.time);
   let hasContent = false;
   for (let i = 0; i < msg.parts.length; i++) {
     if (msg.parts[i].type === 'tool') {
@@ -381,7 +382,7 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
         continue;
       }
     }
-    const node = renderPart(msg.parts[i], t, Boolean(opts?.live) && i === msg.parts.length - 1);
+    const node = renderPart(msg.parts[i], t, Boolean(opts?.live) && elapsed === null && i === msg.parts.length - 1, elapsed);
     if (node) {
       el.append(node);
       hasContent = true;
@@ -405,7 +406,7 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
   return el;
 }
 
-export function renderPart(p: MessagePart, t: Translate, tailLive = false): HTMLElement | null {
+export function renderPart(p: MessagePart, t: Translate, tailLive = false, elapsed: string | null = null): HTMLElement | null {
   // UnknownPart 带 string 索引签名，联合不可判别；按 case 显式收窄
   switch (p.type) {
     case 'text': {
@@ -420,14 +421,14 @@ export function renderPart(p: MessagePart, t: Translate, tailLive = false): HTML
       const rp = p as unknown as ReasoningPart;
       if (!rp.text?.trim()) return null;
       // 流式消息的尾部推理部件=正在思考 → 文字扫光摘要；
-      // 后面出现输出部件或消息已落档 → 定格为"✻ 思考过程 ▸"存档态。
+      // 消息落档后按服务端起止时间展示固定用时，缺时间才保留普通摘要。
       // 摘要必须是 <summary> 元素：details 首子元素非 summary 时浏览器会渲染默认"详情"
       const chevron = iconEl('chevronRight');
       chevron.classList.add('reasoning-chevron');
       const summary = tailLive
         ? liveReasoningSummary(t)
-        : h('summary', {}, t('thoughtProcess'), chevron);
-      return h('details', { class: 'reasoning', 'data-part-id': rp.partId },
+        : h('summary', {}, elapsed === null ? t('thoughtProcess') : t('timeSpent', { duration: elapsed }), chevron);
+      return h('details', { class: elapsed === null ? 'reasoning' : 'reasoning reasoning-complete', 'data-part-id': rp.partId },
         summary,
         h('div', { class: 'md reasoning-body' }, htmlNode(renderMarkdown(rp.text)))
       );

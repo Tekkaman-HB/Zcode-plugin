@@ -1,11 +1,11 @@
 /**
  * [INPUT]: 消费 ../bridge、../../protocol/types、./render、./icons、./clipboard、./format、./events、./i18n 和 ./quotaRings
- * [OUTPUT]: MenuHost/MenuController，统一模型与横排低/中/高思考强度（原始值发送、缺档禁用）、20px 语义权限模式、附件、聊天操作、设置、历史搜索、上下文和额度菜单，提供键盘导航/定位/焦点恢复；处理中使用统一文字扫光
+ * [OUTPUT]: MenuHost/MenuController，统一模型与横排低/中/高思考强度（原始值发送、缺档禁用）、20px 语义权限模式、附件、聊天操作、设置、历史搜索、上下文和额度菜单，提供键盘导航/定位/焦点恢复；MCP 未连接红灯置顶、远程未知灰灯；处理中使用统一文字扫光
  * [POS]: webview 弹层菜单唯一实现；ChatApp 装配，ComposerController 复用 slash/@ 导航设施
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { AvailableModel } from '../../protocol/types';
-import type { FromWebviewMessage, QuotaUsagePayload } from '../bridge';
+import type { FromWebviewMessage, QuotaUsagePayload, McpServerEntry } from '../bridge';
 import { h, relTime, processingLabel } from './render';
 import { MODE_ICONS, iconEl } from './icons';
 import { copyText } from './clipboard';
@@ -21,7 +21,7 @@ export interface MenuHost {
   session: ChatSessionState | null;
   serverState: string;
   mcp: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } | null;
-  mcpServers: { name: string; pid: number; source: string }[] | null;
+  mcpServers: McpServerEntry[] | null;
   ctxBreakdown: { source: string; chars: number }[] | null;
   modelBtn: HTMLButtonElement;
   gearBtn: HTMLButtonElement;
@@ -431,13 +431,14 @@ export class MenuController {
         list.append(h('div', { class: 'menu-group' },
           `${host.t('mcpReady')} · ${m.connectedCount ?? 0}/${m.configuredCount ?? 0}${(m.failedCount ?? 0) ? ` · ⚠ ${m.failedCount}` : ''}`));
       }
-      for (const sv of servers) {
-        list.append(h('div', { class: 'menu-item static', title: `${sv.name} · pid ${sv.pid}` },
+      for (const sv of [...servers].sort((a, b) => Number(b.connected === false) - Number(a.connected === false))) {
+        const status = host.t(sv.connected === true ? 'mcpConnected' : sv.connected === false ? 'mcpDisconnected' : 'mcpUnknown');
+        list.append(h('div', { class: 'menu-item static', title: `${sv.name} · ${status}${sv.pid === undefined ? '' : ` · pid ${sv.pid}`}` },
           h('span', { class: 'menu-item-label' },
-            h('span', { class: 'mcp-dot ok' }),
+            h('span', { class: `mcp-dot ${sv.connected === true ? 'ok' : sv.connected === false ? 'bad' : 'unknown'}` }),
             h('span', { class: 'mcp-server-name' }, sv.name)
           ),
-          h('span', { class: 'menu-item-meta' }, host.t('mcpConnected'))
+          h('span', { class: 'menu-item-meta' }, status)
         ));
       }
     }

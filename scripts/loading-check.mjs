@@ -1,10 +1,89 @@
 /**
  * [INPUT]: theme-check 提供的真实 bundle 页面、加载器和检查器，Playwright clock 控制工具/推理刷新时序
- * [OUTPUT]: loadingChecks，处理中文字扫光/无旋转和秒表/刷新续播/主题与无障碍/终态检查
+ * [OUTPUT]: loadingChecks，处理中文字扫光/无旋转和秒表/刷新续播、思考结束固定用时/历史恢复/同色弱化与主题无障碍检查
  * [POS]: scripts/ 的处理状态回归模块，由 theme-check.mjs 调用，不启动 CLI 或请求模型
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 export async function loadingChecks(page, load, check) {
+  await check('思考结束显示真实用时，历史恢复保持一致，缺失或无效时间不伪造数字', async () => {
+    await load('&scene=empty');
+    const render = async time => {
+      await page.evaluate(time => {
+        const f = window.__fixture, data = f.makeSnapshot('empty');
+        const m = f.message('elapsed', 'assistant', [{ type: 'reasoning', text: '完成检查。' }, f.text('最终答复。')]);
+        m.info.time = time; data.messages = [m];
+        f.post({ kind: 'session-snapshot', data });
+      }, time);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await page.waitForSelector('.reasoning > summary');
+      return page.locator('.reasoning > summary').innerText();
+    };
+    const start = 1700000000000;
+    if (await render({ created: start, completed: start + 372000 }) !== '用时 6m 12s') return false;
+    await load('&scene=empty');
+    if (await render({ created: start, completed: start + 372000 }) !== '用时 6m 12s') return false;
+    for (const [seconds, label] of [[0, '0s'], [9, '9s'], [60, '1m 0s']]) {
+      if (await render({ created: start, completed: start + seconds * 1000 }) !== '用时 ' + label) return false;
+    }
+    for (const time of [undefined, { created: start }, { created: start, completed: start - 1 }, { created: 'bad', completed: start }]) {
+      if (await render(time) !== '思考过程') return false;
+    }
+    await load('&scene=empty');
+    await page.evaluate(() => {
+      const f = window.__fixture;
+      f.status('running');
+      f.post({ kind: 'session-event', data: { type: 'model.streaming', sessionId: 's1', payload: {
+        kind: 'reasoning_delta', assistantMessageId: 'live-elapsed', partId: 'elapsed-part', delta: '持续思考。'
+      } } });
+    });
+    await page.waitForSelector('.reasoning-live');
+    await page.evaluate(start => {
+      const f = window.__fixture;
+      const m = f.message('live-elapsed', 'assistant', [{ type: 'reasoning', partId: 'elapsed-part', text: '完成思考。' }]);
+      m.info.time = { created: start, completed: start + 4000 };
+      f.post({ kind: 'session-event', data: { type: 'message.upserted', sessionId: 's1', payload: { message: m } } });
+    }, start);
+    await page.waitForFunction(() => document.querySelector('.reasoning > summary')?.textContent === '用时 4s');
+    if (await page.locator('.reasoning-live, .reasoning .processing').count()) return false;
+    await load('&scene=empty&locale=en-US');
+    if (await render({ created: start, completed: start + 372000 }) !== 'Worked for 6m 12s') return false;
+    return !await page.locator('.think-secs, .think-pixel').count();
+  });
+
+  await check('展开思考与用时同色，Markdown 代码/强调/引用弱化，四主题窄栏与键盘可用', async () => {
+    for (const theme of ['dark', 'light', 'hc', 'hclight']) {
+      await load('&scene=empty&theme=' + theme);
+      await page.evaluate(() => {
+        const f = window.__fixture, data = f.makeSnapshot('empty');
+        const m = f.message('reasoning-colors', 'assistant', [
+          { type: 'reasoning', text: '先核对**边界条件**与 `sessionChanges`。\n\n> 检查保存路径。\n\n```ts\nconst verified = true;\n```' },
+          f.text('这是最终答复，应比思考过程更突出。')
+        ]);
+        m.info.time = { created: 1700000000000, completed: 1700000372000 }; data.messages = [m];
+        f.post({ kind: 'session-snapshot', data });
+      });
+      await page.waitForSelector('.reasoning > summary');
+      await page.locator('.reasoning > summary').focus();
+      await page.keyboard.press('Enter');
+      if (!await page.locator('.reasoning-body').isVisible()) return false;
+      for (const width of [260, 460]) {
+        await page.setViewportSize({ width, height: 900 });
+        const valid = await page.locator('.reasoning').evaluate(el => {
+          const summary = el.querySelector('summary'), body = el.querySelector('.reasoning-body');
+          const color = getComputedStyle(summary).color;
+          return getComputedStyle(body).color === color
+            && [...body.querySelectorAll('p, strong, code, blockquote')].every(n => getComputedStyle(n).color === color)
+            && getComputedStyle(el.parentElement.querySelector(':scope > .md')).color !== color
+            && document.documentElement.scrollWidth <= innerWidth;
+        });
+        if (!valid) return false;
+      }
+      await page.keyboard.press('Enter');
+      if (await page.locator('.reasoning-body').isVisible()) return false;
+    }
+    return true;
+  });
+
   await check('首响等待只有扫光文字，没有旋转图形、秒表或 JS 秒表定时器', async () => {
     await load('&scene=empty');
     await page.evaluate(() => {

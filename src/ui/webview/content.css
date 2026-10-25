@@ -1,6 +1,6 @@
 /**
  * [INPUT]: ./tokens.css 的语义变量；render/interaction/queue/todoPanel 生成的 DOM 与状态类
- * [OUTPUT]: 消息、段落/代码排版、居中思考箭头、24px 紧凑工具活动行/展开收起均四角圆润的标题栏/16px 静态语义图标、14px 细描边任务三态与任务扫光文字、diff、权限/问答和任务进度样式
+ * [OUTPUT]: 消息、段落/代码排版、思考用时/展开文字同色弱化与完成分隔线、居中思考箭头、24px 紧凑工具活动行/展开收起均四角圆润的标题栏/16px 静态语义图标、14px 细描边任务三态与任务扫光文字、diff、权限/问答和任务进度样式
  * [POS]: webview 内容组件层，被 styles.css 导入；折叠与焦点合同由 UI 回归守护
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -54,20 +54,20 @@
 .md img { max-width: 100%; border-radius: var(--radius-control); }
 
 /* 推理（思考过程折叠） */
-.reasoning { margin: 4px 0; }
+.reasoning { margin: 4px 0; color: var(--ink-3); }
+.reasoning-complete { padding-bottom: 6px; border-bottom: 1px solid var(--line-soft); }
 .reasoning > summary {
-  list-style: none; cursor: pointer; font-size: 12px; font-weight: 500; color: var(--ink-3);
-  padding: 3px 0; transition: color 100ms var(--ease-out);
+  list-style: none; cursor: pointer; font-size: 12px; font-weight: 500; color: inherit;
+  padding: 3px 0;
   display: flex; align-items: center; gap: 5px;
 }
-.reasoning > summary:hover { color: var(--ink-2); }
 .reasoning > summary::marker { content: none; }
 /* 展开箭头：随 details 开合旋转，亮度继承摘要文字 */
 .reasoning .reasoning-chevron { display: inline-flex; transition: transform var(--dur) var(--ease-out); }
 .reasoning[open] .reasoning-chevron { transform: rotate(90deg); }
-/* 流式推理与首响等待共用扫光文字，落定后换回静态“思考过程”。 */
+/* 流式推理与首响等待共用扫光文字，落定后按消息起止时间展示静态用时。 */
 .reasoning > summary.reasoning-live { gap: 9px; }
-.reasoning-body { font-size: 12.5px; color: var(--ink-2); line-height: 1.6; margin: 4px 0 6px; padding-left: 10px; border-left: 1px solid var(--line); }
+.reasoning-body { --ink: var(--ink-3); --ink-2: var(--ink-3); --link: var(--ink-3); font-size: 12.5px; color: inherit; line-height: 1.6; margin: 4px 0 6px; padding-left: 10px; border-left: 1px solid var(--line); }
 .compaction-note, .timeline-note { font-size: 11.5px; color: var(--ink-3); text-align: center; padding: 3px 0; }
 .compaction-note { color: var(--ink-3); background: var(--inset); border-radius: var(--radius-chip); padding: 3px 10px; display: inline-block; }
 

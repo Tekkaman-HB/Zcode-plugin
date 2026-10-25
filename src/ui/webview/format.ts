@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无依赖（Locale 为类型导入）
- * [OUTPUT]: 对外提供 reasoningChoices 三档映射与 formatTokens/fmtContext/sourceLabel/sourceColor/formatTokensLocale/fmtContextLocale 展示格式化工具与 extractContentTexts/normalizeToolOutputText 工具输出规整
+ * [OUTPUT]: 对外提供 formatElapsedTime 消息固定用时、reasoningChoices 三档映射与 formatTokens/fmtContext/sourceLabel/sourceColor/formatTokensLocale/fmtContextLocale 展示格式化工具与 extractContentTexts/normalizeToolOutputText 工具输出规整
  * [POS]: webview 的数字、思考强度标签与工具输出文本规整层，chat.ts（上下文圆环）、menus.ts（上下文菜单）、events.ts（工具结果提取）与 render.ts（工具卡输出渲染）消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -12,6 +12,16 @@ export function formatTokens(n: number): string {
 
 export function fmtContext(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(0)}M` : `${Math.round(n / 1000)}K`;
+}
+
+/** 消息的服务端起止时间（毫秒）→ 固定用时；缺失/无效记录不补造时长。 */
+export function formatElapsedTime(time: unknown): string | null {
+  if (!time || typeof time !== 'object') return null;
+  const { created, completed } = time as { created?: unknown; completed?: unknown };
+  if (typeof created !== 'number' || typeof completed !== 'number'
+    || !Number.isFinite(created) || !Number.isFinite(completed) || created < 0 || completed < created) return null;
+  const seconds = Math.floor((completed - created) / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 /** 模型原始档位收敛为低/中/高；缺档置灰，旧会话的中间值归入最近档。 */

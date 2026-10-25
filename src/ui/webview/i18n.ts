@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无依赖
- * [OUTPUT]: makeT、Locale、Translate 与 WvStringKey，覆盖处理/思考/加载状态与底部会话差异与缺失/部分记录提示/导航/输入/菜单/首响等待/工具活动/复制/交互卡的中英文文案
+ * [OUTPUT]: makeT、Locale、Translate 与 WvStringKey，覆盖 MCP 连接/未连接/未知及处理/思考/加载状态与底部会话差异与缺失/部分记录提示/导航/输入/菜单/首响等待/工具活动/复制/交互卡的中英文文案
  * [POS]: webview 的 i18n 层，bootstrap 载荷带来的 locale 决定语言
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -58,6 +58,7 @@ const strings = {
     loading: '正在加载',
     waitingResponse: '正在处理',
     thoughtProcess: '思考过程',
+    timeSpent: '用时 {duration}',
     running: '运行中',
     idle: '空闲',
     waiting: '等待确认',
@@ -92,6 +93,8 @@ const strings = {
     settings: '设置',
     mcpServers: 'MCP 服务',
     mcpConnected: '已连接',
+    mcpDisconnected: '未连接',
+    mcpUnknown: '状态未知',
     modes: '模式',
     effort: '思考强度',
     input: '输入',
@@ -203,6 +206,7 @@ const strings = {
     loading: 'Loading',
     waitingResponse: 'Working',
     thoughtProcess: 'Thought process',
+    timeSpent: 'Worked for {duration}',
     running: 'Running',
     idle: 'Idle',
     waiting: 'Waiting for approval',
@@ -237,6 +241,8 @@ const strings = {
     settings: 'Settings',
     mcpServers: 'MCP servers',
     mcpConnected: 'connected',
+    mcpDisconnected: 'Disconnected',
+    mcpUnknown: 'Unknown status',
     modes: 'Modes',
     effort: 'Effort',
     input: 'Input',
