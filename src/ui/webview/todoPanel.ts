@@ -1,10 +1,11 @@
 /**
- * [INPUT]: 消费 ./render 的 h()/isTodoWrite()、./events 的 MutableSessionMessage、./i18n 的 Translate
- * [OUTPUT]: 对外提供 extractLatestTodos()（消息集 → 最近 TodoWrite 推导，含任务身份 callId）、renderTodoPanel()（进程面板渲染：点击头行立即重建；全部完成时头行渲染关闭按钮，onClose(callId) 上报）与关闭记忆持久化 loadClosedTodoCallIds/saveClosedTodoCallIds 及 TodoPanelInfo/TodoPanelItem 形状
+ * [INPUT]: 消费 ./render 的 h/isTodoWrite、./icons 的 iconEl、./events 的消息类型与 ./i18n
+ * [OUTPUT]: extractLatestTodos、renderTodoPanel、关闭记忆读写及相关类型；任务把手使用原生按钮，支持键盘展开/折叠与完成后关闭
  * [POS]: webview 的进程面板层——消息流与 composer 之间的常驻任务进展（对标桌面端"进程"状态面板）；不持有渲染状态，chat.ts 在消息集变化时调用；关闭记忆经 localStorage 持久化（跨会话切换/webview 重载保留）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { h, isTodoWrite } from './render';
+import { iconEl } from './icons';
 import type { MutableSessionMessage } from './events';
 import type { Translate } from './i18n';
 
@@ -99,27 +100,29 @@ export function renderTodoPanel(
   const current = todos.find((x) => x.status === 'in_progress');
   const dot = allDone ? 'todo-dot-completed' : current ? 'todo-dot-running' : 'todo-dot-pending';
 
-  const head = h('div', { class: 'todo-panel-head' },
-    h('span', { class: `todo-dot ${dot}` }, allDone ? '✓' : ''),
+  const toggle = h('button', { type: 'button', class: 'todo-panel-toggle', 'aria-expanded': String(wasOpen) },
+    h('span', { class: `todo-dot ${dot}` }, allDone ? iconEl('check') : null),
     h('span', { class: 'todo-panel-title' }, t('progressPanel')),
     h('span', { class: 'todo-panel-count' }, `${done}/${todos.length}`),
     h('span', { class: 'todo-panel-current' }, allDone ? t('todoAllDone') : current?.content ?? '')
   );
+  const head = h('div', { class: 'todo-panel-head' }, toggle);
   // 关闭按钮：仅全部完成时出现（未完成的任务没有可关性）；点击不冒泡（不触发展开/折叠）
   if (allDone) {
-    const closeBtn = h('button', { class: 'todo-panel-close', title: t('todoClose') }, '×');
+    const closeBtn = h('button', { type: 'button', class: 'todo-panel-close', title: t('todoClose'), 'aria-label': t('todoClose') }, iconEl('close'));
     closeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       onClose(info.callId);
     });
     head.append(closeBtn);
   }
-  head.append(h('span', { class: 'todo-panel-chevron' }, wasOpen ? '▾' : '▸'));
-  head.addEventListener('click', () => {
+  toggle.append(h('span', { class: 'todo-panel-chevron' }, iconEl(wasOpen ? 'chevronDown' : 'chevronRight')));
+  toggle.addEventListener('click', () => {
     // 翻转意图后立即重建：清单 DOM 只由 renderTodoPanel 落地——只 toggle class 不重建，
     // 点击会"看似无反应"（class 延迟到下次消息刷新才体现=自动打开/折叠不上的根因）
     el.classList.toggle('open');
     renderTodoPanel(el, info, closedCallIds, t, onClose);
+    el.querySelector<HTMLButtonElement>('.todo-panel-toggle')?.focus();
   });
   el.append(head);
 
@@ -130,7 +133,7 @@ export function renderTodoPanel(
     for (const td of todos) {
       const st = td.status === 'completed' ? 'completed' : td.status === 'in_progress' ? 'running' : 'pending';
       list.append(h('div', { class: `todo-item todo-${st}` },
-        h('span', { class: `todo-dot todo-dot-${st}` }, st === 'completed' ? '✓' : ''),
+        h('span', { class: `todo-dot todo-dot-${st}` }, st === 'completed' ? iconEl('check') : null),
         h('span', { class: 'todo-text' }, td.content)));
     }
     el.insertBefore(list, head);

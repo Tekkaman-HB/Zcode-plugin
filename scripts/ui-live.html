@@ -1,91 +1,35 @@
 <!DOCTYPE html>
+<!--
+[INPUT]: /out/webview 真实构建产物与 ./ui-fixtures.js
+[OUTPUT]: 支持主题、空态和 CSP 场景的真实 UI 预览，无 CLI/网络副作用
+[POS]: scripts/ 的产物驱动页；ui-preview 和 theme-check 共用
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+-->
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <script>
-// ?csp=strict → 复现修复前 CSP（style 属性被静默剥离：色条通条蓝/彩点隐形）
-// ?csp=fixed  → 修复后 CSP（style-src 'unsafe-inline'，与 chatProvider 等价）
-// 默认无 CSP（历史行为）。script-src 放宽以跑通本页无 nonce 的内联 harness。
-(function () {
-  var mode = new URLSearchParams(location.search).get('csp');
+(() => {
+  const mode = new URLSearchParams(location.search).get('csp');
   if (!mode) return;
-  var styleSrc = mode === 'fixed' ? "style-src 'self' 'unsafe-inline'" : "style-src 'self'";
-  var m = document.createElement('meta');
-  m.setAttribute('http-equiv', 'Content-Security-Policy');
-  m.setAttribute('content', "default-src 'none'; " + styleSrc + "; script-src 'self' 'unsafe-inline'; img-src * data:; font-src *");
-  document.head.appendChild(m);
-  document.addEventListener('DOMContentLoaded', function () {
-    var b = document.getElementById('fire-ctx');
-    if (b) b.value = 'CSP:' + mode + '（注入 breakdown）';
-  });
+  const meta = document.createElement('meta');
+  meta.httpEquiv = 'Content-Security-Policy';
+  meta.content = "default-src 'none'; style-src 'self'" + (mode === 'fixed' ? " 'unsafe-inline'" : '') +
+    "; script-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'";
+  document.head.append(meta);
 })();
 </script>
-<title>ZCode 真实产物驱动页（协议桥注入）</title>
+<title>ZCode · Codex 插件界面验收</title>
 <link rel="stylesheet" href="/out/webview/styles.css">
-<style>html,body{height:100%;margin:0}</style>
 </head>
 <body>
-<div id="harness" style="position:fixed;top:8px;right:8px;z-index:999;display:flex;gap:4px;font:500 11px/1 Inter,sans-serif">
-  <button id="fire-ctx">注入 session.updated(breakdown)</button>
-  <button id="open-ctx">点开上下文弹层</button>
+<div id="harness" style="position:fixed;top:42px;right:8px;z-index:999;display:flex;gap:4px;font:11px sans-serif">
+<button id="fire-ctx">注入上下文</button><button id="open-ctx">查看上下文</button>
 </div>
-<style>#harness button{height:22px;padding:0 9px;border-radius:999px;border:1px solid #888;background:#fff;color:#333;cursor:pointer}</style>
 <div id="app"></div>
-<script>
-  // VSCode webview API 桩：记录 webview→宿主 消息
-  window.__sent = [];
-  window.acquireVsCodeApi = function () {
-    return {
-      postMessage: function (m) { window.__sent.push(m); },
-      getState: function () { return null; },
-      setState: function () {}
-    };
-  };
-</script>
+<script src="/scripts/ui-fixtures.js"></script>
 <script src="/out/webview/main.js"></script>
-<script>
-(function () {
-  var post = function (m) { window.postMessage(m, '*'); };
-  var now = Date.now();
-
-  post({ kind: 'bootstrap', data: {
-    locale: 'zh-CN', workspacePath: '/Users/demo/project', environmentOk: true,
-    account: { loggedIn: true, user: { email: 'demo@z.ai' }, providerIds: ['p'], providerLabels: { p: 'Z.AI' } },
-    serverState: 'running', defaultMode: 'build'
-  }});
-
-  post({ kind: 'session-snapshot', data: {
-    session: { sessionId: 's1', createdAt: now, updatedAt: now, mode: 'build', status: 'running', title: '上下文弹层排障', sessionKind: 'session', workspace: { workspacePath: '/Users/demo/project' } },
-    settings: {
-      mode: { current: 'build' },
-      model: { available: [{ ref: { providerId: 'p', modelId: 'glm-5.3' }, label: 'GLM-5.3', providerLabel: 'Z.AI', contextWindow: 1000000, maxOutputTokens: 128000 }], current: { providerId: 'p', modelId: 'glm-5.3' } },
-      permission: { mode: 'build' }
-    },
-    projection: { sessionId: 's1', status: 'running', mode: 'build', turnCount: 1, totalTokenCount: 0, contextUsed: 0, contextWindow: 1000000, pendingPermissions: [], activeToolCalls: [] },
-    slashCommands: [], messages: []
-  }});
-
-  // 协议信封：session/event {type, payload}——contextUsageBreakdown 在 payload（probe-ctx 实证）
-  document.getElementById('fire-ctx').addEventListener('click', function () {
-    post({ kind: 'session-event', data: { type: 'session.updated', sessionId: 's1', payload: {
-      usage: { totalTokens: 434000 },
-      contextWindow: 1000000,
-      contextUsageBreakdown: [
-        { source: 'messages', chars: 348000 },
-        { source: 'mcp_tool_schemas', chars: 48000 },
-        { source: 'system_tool_schemas', chars: 27000 },
-        { source: 'skills', chars: 8000 },
-        { source: 'system_prompt', chars: 2000 },
-        { source: 'meta_user_context', chars: 1000 }
-      ]
-    }}});
-  });
-
-  document.getElementById('open-ctx').addEventListener('click', function () {
-    var ring = document.querySelector('.ctx-ring-btn');
-    if (ring) ring.click();
-  });
-})();
-</script>
+<script>window.__fixture.start();</script>
 </body>
 </html>

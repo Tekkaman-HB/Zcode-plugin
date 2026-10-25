@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 esbuild、node:fs/path；读取 src/ 与 scripts/ 源码与 media/fonts 字体
- * [OUTPUT]: 产出 out/extension.js、out/webview/*（styles.css 生产态 minify + fonts/）、out/scripts/smoke.js、out/scripts/smoke-relay.js
+ * [INPUT]: 依赖 esbuild、node:fs/path；读取 src/ 与 scripts/ 源码，合并 webview 的分层 CSS
+ * [OUTPUT]: 产出 out/extension.js、out/webview/*（styles.css 分层合并 + 生产态 minify）、out/scripts/smoke.js、out/scripts/smoke-relay.js
  * [POS]: 构建脚本，双 target（node 扩展宿主 + 浏览器 webview），全项目唯一构建入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -96,36 +96,20 @@ const bridgeHarness = {
 };
 
 // ---------- 静态资源 ----------
-function copyStatic() {
-  const cssSrc = fs.readFileSync(path.join(root, 'src/ui/webview/styles.css'), 'utf8');
-  // watch 模式保留可读样式便于调试；生产模式 minify（token 表 + 组件规则的体积红利）
-  if (watch) {
-    fs.writeFileSync(path.join(out, 'webview/styles.css'), cssSrc);
-  } else {
-    const min = esbuild.transformSync(cssSrc, { loader: 'css', minify: true });
-    fs.writeFileSync(path.join(out, 'webview/styles.css'), min.code);
-  }
-  // Inter 可变字重子集（latin/latin-ext/cyrillic/cyrillic-ext/greek，源自 Beautiful UI 同款）：
-  // webview CSP 走 cspSource，随产物分发；追加子集 = 下载文件 + 在此登记
-  const INTER_SUBSETS = [
-    'inter-var-latin.woff2',
-    'inter-var-latin-ext.woff2',
-    'inter-var-cyrillic.woff2',
-    'inter-var-cyrillic-ext.woff2',
-    'inter-var-greek.woff2'
-  ];
-  fs.mkdirSync(path.join(out, 'webview/fonts'), { recursive: true });
-  for (const f of INTER_SUBSETS) {
-    fs.copyFileSync(path.join(root, 'media/fonts', f), path.join(out, 'webview/fonts', f));
-  }
-}
+const styles = {
+  entryPoints: [path.join(root, 'src/ui/webview/styles.css')],
+  bundle: true,
+  outfile: path.join(out, 'webview/styles.css'),
+  minify: !watch,
+  logLevel: 'info'
+};
 
 (async () => {
   if (watch) {
     const ctx = await esbuild.context(extension);
     const wvCtx = await esbuild.context(webview);
-    copyStatic();
-    await Promise.all([ctx.watch(), wvCtx.watch()]);
+    const cssCtx = await esbuild.context(styles);
+    await Promise.all([ctx.watch(), wvCtx.watch(), cssCtx.watch()]);
     console.log('[esbuild] watching...');
   } else {
     await esbuild.build(extension);
@@ -134,7 +118,7 @@ function copyStatic() {
     await esbuild.build(smokeRelay);
     await esbuild.build(smokeServer);
     await esbuild.build(bridgeHarness);
-    copyStatic();
+    await esbuild.build(styles);
   }
 })().catch((e) => {
   console.error(e);

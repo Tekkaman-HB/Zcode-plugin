@@ -1,0 +1,108 @@
+/**
+ * [INPUT]: VSCode 注入的主题/字体 CSS 变量与 body 主题类
+ * [OUTPUT]: 明暗/高对比主题的语义 tokens；宿主字体、4px 间距、22px 输入框圆角与中性操作色
+ * [POS]: webview 设计令牌唯一来源，被 styles.css 与 content.css 消费
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+:root {
+  --space: .25rem;
+  --page: var(--vscode-sideBar-background, #f9f9f9);
+  --canvas: var(--vscode-sideBar-background, #fff);
+  --surface: var(--vscode-dropdown-background, #fff);
+  --inset: var(--vscode-textCodeBlock-background, #f7f7f8);
+  --field: var(--vscode-input-background, #f4f4f4);
+  --ink: var(--vscode-foreground, #202123);
+  --ink-2: var(--vscode-foreground, #5d5d5d);
+  --ink-3: var(--vscode-descriptionForeground, #6e6e6e);
+  --hover: var(--vscode-list-hoverBackground, #f0f0f0);
+  --link: var(--vscode-textLink-foreground, #0969da);
+  --focus: var(--vscode-focusBorder, #007fd4);
+  --green: var(--vscode-charts-green, #16803d);
+  --orange: var(--vscode-charts-orange, #ac6800);
+  --red: var(--vscode-errorForeground, #c42b32);
+  --radius-chip: 6px;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-window: 12px;
+  --radius-composer: calc(var(--space) * 5.5);
+  --ease-out: cubic-bezier(0, 0, .2, 1);
+  --ease-in-out: cubic-bezier(.4, 0, .2, 1);
+  --dur: 120ms;
+}
+/* 语义别名在 body 计算，避免根节点的亮色值被继承后冻结。 */
+body {
+  --font-sans: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  --font-mono: var(--vscode-editor-font-family, "SFMono-Regular", Menlo, Consolas, monospace);
+  --font-size: var(--vscode-font-size, 13px);
+  --hover-2: color-mix(in srgb, var(--ink) 12%, var(--canvas));
+  --line: var(--vscode-widget-border, color-mix(in srgb, var(--ink) 12%, transparent));
+  --line-strong: var(--vscode-contrastBorder, color-mix(in srgb, var(--ink) 25%, transparent));
+  --line-soft: color-mix(in srgb, var(--ink) 8%, transparent);
+  --accent: var(--ink);
+  --accent-ink: var(--ink);
+  --accent-tint: var(--hover);
+  --green-tint: var(--vscode-diffEditor-insertedTextBackground, #16803d14);
+  --red-tint: var(--vscode-diffEditor-removedTextBackground, #c42b3212);
+  --orange-tint: color-mix(in srgb, var(--orange) 10%, transparent);
+  --on-accent: var(--canvas);
+  --shadow-hairline: 0 0 0 1px var(--line);
+  --shadow-btn: none;
+  --shadow-card: 0 0 0 1px var(--line);
+  --shadow-raised: 0 0 0 1px var(--line-strong);
+  --shadow-overlay: 0 0 0 1px var(--line), 0 8px 24px #0000001a;
+}
+body.vscode-dark {
+  color-scheme: dark;
+  --page: var(--vscode-sideBar-background, #181818);
+  --canvas: var(--vscode-sideBar-background, #181818);
+  --surface: var(--vscode-dropdown-background, #252526);
+  --inset: var(--vscode-textCodeBlock-background, #202020);
+  --field: var(--vscode-input-background, #222222);
+  --ink: var(--vscode-foreground, #d4d4d4);
+  --ink-2: var(--vscode-foreground, #b4b4b4);
+  --ink-3: var(--vscode-descriptionForeground, #a0a0a0);
+  --hover: var(--vscode-list-hoverBackground, #2a2a2a);
+  --link: var(--vscode-textLink-foreground, #9dc1f2);
+  --green: var(--vscode-charts-green, #73c991);
+  --orange: var(--vscode-charts-orange, #cca700);
+  --red: var(--vscode-errorForeground, #f48771);
+  --shadow-overlay: 0 0 0 1px var(--line), 0 8px 24px #00000066;
+}
+/* HC 必须位于 dark 之后；同时存在两类时使用 HC 合同。 */
+body.vscode-high-contrast {
+  color-scheme: dark;
+  --page: var(--vscode-sideBar-background, #000);
+  --canvas: var(--vscode-sideBar-background, #000);
+  --surface: var(--vscode-dropdown-background, #000);
+  --inset: var(--vscode-textCodeBlock-background, #121212);
+  --field: var(--vscode-input-background, #000);
+  --ink: var(--vscode-foreground, #fff);
+  --ink-2: var(--vscode-foreground, #fff);
+  --ink-3: var(--vscode-descriptionForeground, #ddd);
+  --hover: var(--vscode-list-hoverBackground, #313131);
+  --line: var(--vscode-contrastBorder, #6fc3df);
+  --line-soft: var(--line);
+  --line-strong: var(--line);
+  --focus: var(--vscode-focusBorder, #f38518);
+  --shadow-card: 0 0 0 1px var(--line);
+  --shadow-overlay: 0 0 0 1px var(--line);
+}
+body.vscode-high-contrast-light {
+  color-scheme: light;
+  --page: var(--vscode-sideBar-background, #fff);
+  --canvas: var(--vscode-sideBar-background, #fff);
+  --surface: var(--vscode-dropdown-background, #fff);
+  --inset: var(--vscode-textCodeBlock-background, #eee);
+  --field: var(--vscode-input-background, #fff);
+  --ink: var(--vscode-foreground, #000);
+  --ink-2: var(--vscode-foreground, #000);
+  --ink-3: var(--vscode-descriptionForeground, #292929);
+  --hover: var(--vscode-list-hoverBackground, #e0e0e0);
+  --line: var(--vscode-contrastBorder, #0f4a85);
+  --line-soft: var(--line);
+  --line-strong: var(--line);
+  --focus: var(--vscode-focusBorder, #0f4a85);
+  --shadow-card: 0 0 0 1px var(--line);
+  --shadow-overlay: 0 0 0 1px var(--line);
+}
+

@@ -24,3 +24,9 @@ docs/**
 GEMINI.md
 .env.example
 .env*
+
+# 本地验收与工具缓存
+.playwright-mcp/**
+.serena/**
+.zcode/**
+**/.mimosa/**

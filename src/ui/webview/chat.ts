@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 消费 ../../protocol/types、../bridge 契约、./render、./i18n；委托 ./events（协议事件适配）、./queue（交互焦点队列）、./menus（弹层菜单，含套餐用量弹窗）、./todoPanel（进程面板渲染）、./quotaRings（套餐用量圆环）、./icons、./format
- * [OUTPUT]: 对外提供 ChatApp（webview 聊天应用：状态机 + 应用壳 + 桥接消息入口；EventHost/QueueHost/MenuHost 的宿主实现）；含 diff 式 rebuildMessages（快照复用节点 + 流式消息跳过，根治全量重建闪烁）与手机配对面板（openPairPanel/renderPairPanel，backdrop 固定弹层 + pair-status 推送原地刷新）
- * [POS]: webview 的中枢——持有全部共享状态，事件适配/交互队列/菜单/进程面板渲染委托给子模块；slash/@ 弹层因需改写输入框文本留在本层
+ * [INPUT]: 消费协议/bridge 契约、./events、./queue；委托 ./shell、./composer、./panels、./menus、./todoPanel、./quotaRings 与 ./render
+ * [OUTPUT]: 对外提供 ChatApp，共享状态与桥接消息入口；快照复用/流式增量渲染、基于宿主 ready 状态的发送供能和滚动跟随
+ * [POS]: webview 中枢与各 Host 接口的实现者；布局、输入、模态和菜单分别由子模块负责
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type {
@@ -12,30 +12,20 @@ import type {
   UserInputRequestParams
 } from '../../protocol/types';
 import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef, QuotaUsagePayload, PairingPanelPayload } from '../bridge';
-import { h, renderMessage, esc, resetToolCollapseState } from './render';
+import { h, renderMessage, resetToolCollapseState, isSystemReminderText } from './render';
 import type { InteractionDraft } from './interaction';
 import { makeT, type Locale, type Translate } from './i18n';
-import { zLogoEl, modeIconEl, atIconEl, gearIconEl, plusIconEl, clockIconEl, phoneIconEl } from './icons';
-import { formatTokens, fmtContext } from './format';
+import { iconEl } from './icons';
+import { createChatShell, renderWelcome, renderContextRing as renderContextRingDom, renderHeaderControls as renderHeaderControlsDom } from './shell';
+import { ComposerController } from './composer';
+import { PanelsController } from './panels';
+
 import { applySessionEvent, normalizeMessageId, type ChatSessionState, type MutableSessionMessage } from './events';
 import { renderPermissionCards } from './queue';
 import { MenuController } from './menus';
 import { extractLatestTodos, renderTodoPanel as renderTodoPanelDom, loadClosedTodoCallIds, saveClosedTodoCallIds } from './todoPanel';
 import { createQuotaRings } from './quotaRings';
 
-/** 模式 chip 短名（中文对齐桌面端语义） */
-const MODE_CHIP_LABEL: Record<string, string> = {
-  plan: '计划模式',
-  build: '变更前确认',
-  edit: '自动编辑',
-  yolo: '完全访问'
-};
-
-const SUGGESTIONS: { zh: string; en: string }[] = [
-  { zh: '帮我分析这个项目的结构', en: 'Analyze this project structure' },
-  { zh: '修复当前的 TypeScript 编译错误', en: 'Fix the TypeScript errors' },
-  { zh: '为这个函数写单元测试', en: 'Write unit tests for this function' }
-];
 
 export class ChatApp {
   // ═══════════ 子模块宿主面（public：./events ./queue ./menus 经 Host 接口访问） ═══════════
@@ -44,7 +34,7 @@ export class ChatApp {
   environmentOk = true;
   environmentDetail: string | undefined;
   account: BootstrapPayload['account'] = null;
-  serverState = 'stopped';
+  serverState: BootstrapPayload['serverState'] = 'stopped';
   defaultMode = 'build';
   serverDetail: string | undefined;
   session: ChatSessionState | null = null;
@@ -85,8 +75,7 @@ export class ChatApp {
   /** 手机配对面板：宿主 PairingController 推送的最新载荷（面板重开即显，无需等回包） */
   pairPanel: PairingPanelPayload | null = null;
   pairEl: HTMLElement | null = null;
-  /** 上次成功渲染的二维码 SVG（starting 态置灰保留，防视觉断裂） */
-  private lastPairSvg: string | null = null;
+
   ctxBreakdown: { source: string; chars: number }[] | null = null;
   /** 用户关闭的进程面板任务集合（TodoWrite callId，localStorage 持久化——跨会话切换/重载保留；新一轮任务新 callId 自动重现） */
   todoClosedCallIds = loadClosedTodoCallIds();
@@ -140,14 +129,18 @@ export class ChatApp {
   ctxRingBtn!: HTMLButtonElement;
   /** 套餐用量双圆环（5 小时/每周）——数据由宿主 QuotaMonitor 经 quota-usage 消息推送 */
   private readonly quotaRings = createQuotaRings();
+  private readonly composer = new ComposerController(this);
+  private readonly panels = new PanelsController(this);
+  attachBtn!: HTMLButtonElement;
+  chatMenuBtn!: HTMLButtonElement;
+  jumpBtn!: HTMLButtonElement;
+  followOutput = true;
   /** 圆环容器即弹层锚点（MenuHost 面）；最新载荷留存供弹窗渲染 */
   readonly quotaRingBtn: HTMLElement = this.quotaRings.el;
   quotaPayload: QuotaUsagePayload | null = null;
-  slashIndex = -1;
   attachments: AttachmentRef[] = [];
   atDir = '';
   dirEntries: { dir: string; entries: DirEntry[] } | null = null;
-  sessionsMenuOpen = false;
   currentAssistantId: string | null = null;
   mcp: { started: number; done: boolean; configuredCount?: number; connectedCount?: number; failedCount?: number; servers?: string[]; crashed?: string[] } | null = null;
   mcpServers: { name: string; pid: number; source: string }[] | null = null;
@@ -175,101 +168,29 @@ export class ChatApp {
   // ═══════════════ 骨架 ═══════════════
 
   private buildShell(): void {
-    // 顶部标题行（对标 Claude Code）：左侧会话标题，右侧时钟/新建两个幽灵图标
-    const titlebar = h('div', { class: 'chat-titlebar' },
-      this.titleEl = h('div', { class: 'chat-title' }, this.t('appTitle')),
-      h('div', { class: 'titlebar-actions' },
-        this.historyBtn = h('button', { class: 'titlebar-btn', title: this.t('sessions'), onclick: () => this.toggleSessionsMenu() }, clockIconEl()),
-        h('button', { class: 'titlebar-btn', title: this.t('newSession'), onclick: () => this.post({ kind: 'new-session' }) }, plusIconEl())
-      )
-    );
-    this.banner = h('div', { class: 'banner hidden' });
-    this.messagesEl = h('div', { class: 'messages', id: 'messages' });
-    this.overlayEl = h('div', { class: 'overlay' });
-    this.todoPanelEl = h('div', { class: 'todo-panel hidden' });
-
-    // 输入区（对标 Claude Code）：附件 chips 行 → 文本框 → 控制栏
-    // 左：+ 附件 / @ 引用 / 模型 / 齿轮(配置收纳)  右：模式 / 发送
-    this.attachRow = h('div', { class: 'attach-row hidden' });
-    this.queuedEl = h('div', { class: 'queued-row hidden' });
-    const composer = h('div', { class: 'composer' },
-      this.queuedEl,
-      h('div', { class: 'composer-inner' },
-        this.attachRow,
-        this.composerInput = h('textarea', { class: 'composer-input', placeholder: this.t('inputPlaceholder'), rows: '1' }) as HTMLTextAreaElement
-      ),
-      h('div', { class: 'composer-bar' },
-        h('div', { class: 'composer-bar-left' },
-          h('button', { class: 'bar-icon-btn', title: this.t('attach'), onclick: () => this.post({ kind: 'attach-pick' }) }, plusIconEl()),
-          h('button', { class: 'bar-icon-btn', title: this.t('reference'), onclick: () => this.onAtReference() }, atIconEl()),
-          this.modelBtn = h('button', { class: 'composer-chip', onclick: () => this.toggleModelMenu() }, '…'),
-          this.gearBtn = h('button', { class: 'bar-icon-btn', title: this.t('settings'), onclick: () => this.toggleSettingsMenu() }, gearIconEl())
-        ),
-        h('div', { class: 'composer-bar-right' },
-          this.quotaRings.el,
-          this.ctxRingBtn = h('button', { class: 'ctx-ring-btn hidden', onclick: () => this.toggleContextMenu() }),
-          this.modeBtn = h('button', { class: 'bar-icon-btn', onclick: () => this.toggleModeMenu() }, '…'),
-          this.sendBtn = h('button', { class: 'send-btn', title: this.t('send'), onclick: () => this.onSend() }, '↑') as HTMLButtonElement
-        )
-      )
-    );
-
-    this.root.append(
-      titlebar,
-      this.banner,
-      this.messagesEl,
-      this.overlayEl,
-      this.todoPanelEl,
-      this.menus.popupEl,
-      composer
-    );
-
-    this.composerInput.addEventListener('keydown', (e) => this.onKeydown(e));
-    this.composerInput.addEventListener('input', () => this.onInput());
-    // 套餐用量圆环：点击弹用量明细弹窗（对标上下文圆环）
-    this.quotaRings.el.addEventListener('click', () => this.toggleQuotaMenu());
-    // Cmd/Ctrl+V 粘贴图片：取剪贴板 image 项 → dataUrl → 宿主落地临时文件
-    this.composerInput.addEventListener('paste', (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (!item.type.startsWith('image/')) continue;
-        const file = item.getAsFile();
-        if (!file) continue;
-        e.preventDefault();
-        // 空输入态（无附件且无落盘在途）从 图片1 重新计数；在途检查防快速连贴竞态重名
-        if (!this.attachments.length && !this.pastePending.size) this.pasteSeq = 0;
-        this.pasteSeq++;
-        const label = this.locale === 'zh-CN' ? `图片${this.pasteSeq}.png` : `Image${this.pasteSeq}.png`;
-        const reader = new FileReader();
-        reader.onload = () => {
-          if (typeof reader.result === 'string') {
-            // 协议图片必须走 localPath（probe 实证 dataBase64 不送达）：宿主落盘后回填 path
-            this.pastePending.set(label, reader.result);
-            this.previewRegistry.set(label, reader.result);
-            this.post({ kind: 'save-image', dataUrl: reader.result, name: label });
-          }
-        };
-        reader.readAsDataURL(file);
-        return;
-      }
+    const shell = createChatShell(this.t, {
+      sessions: () => this.toggleSessionsMenu(),
+      settings: () => this.toggleSettingsMenu(),
+      chatMenu: () => this.menus.toggleChatMenu(),
+      newChat: () => { this.hidePopup(); this.post({ kind: 'new-session' }); },
+      attach: () => this.menus.toggleAttachMenu(),
+      model: () => this.toggleModelMenu(),
+      mode: () => this.toggleModeMenu(),
+      context: () => this.toggleContextMenu(),
+      send: () => this.onSend(),
+      latest: () => { this.followOutput = true; this.scrollBottom(); }
+    }, this.quotaRingBtn, this.popupEl);
+    Object.assign(this, shell);
+    this.root.append(shell.fragment);
+    this.composer.bind();
+    this.quotaRingBtn.addEventListener('click', () => this.toggleQuotaMenu());
+    this.messagesEl.addEventListener('scroll', () => {
+      this.followOutput = this.isNearBottom();
+      this.jumpBtn.classList.toggle('hidden', this.followOutput);
     });
-    // 用 mousedown 判定"点外部关闭"：click 时菜单 DOM 可能已被 onclick 重建，旧 target 脱离导致误判闪关
-    document.addEventListener('mousedown', (e) => {
-      const target = e.target as HTMLElement;
-      if (this.popupEl.contains(target)) return;
-      // 触发按钮自身的点击由各自 toggle 处理（同按钮=关闭，异按钮=换菜单）
-      if (target.closest?.('.bar-icon-btn, .composer-chip, .titlebar-btn, .ctx-ring-btn, .quota-rings')) return;
-      this.hidePopup();
-    });
-    this.renderOverlay();
-    // 版本标记：从 main.js 的安装路径解析包版本，悬停标题即可核对"当前窗口跑的是哪个包"
-    // （排障利器：磁盘已装新版但扩展宿主未重载时，这里会显示旧版本号）
     const scriptSrc = document.querySelector('script')?.getAttribute('src') ?? '';
-    const bundleVer = scriptSrc.match(/zcode-vscode-([0-9.]+)\//)?.[1] ?? 'dev';
-    this.titleEl.title = `ZCode webview v${bundleVer}`;
-    console.info(`[zcode-webview] bundle v${bundleVer}`);
+    this.titleEl.title = `ZCode webview v${scriptSrc.match(/zcode-vscode-([0-9.]+)\//)?.[1] ?? 'dev'}`;
+    this.renderOverlay();
   }
 
   // ═══════════════ 桥接消息入口 ═══════════════
@@ -278,6 +199,7 @@ export class ChatApp {
     switch (msg.kind) {
       case 'bootstrap':
         this.locale = msg.data.locale;
+        this.defaultMode = msg.data.defaultMode;
         this.t = makeT(this.locale);
         this.environmentOk = msg.data.environmentOk;
         this.environmentDetail = msg.data.environmentDetail;
@@ -301,6 +223,8 @@ export class ChatApp {
         break;
       case 'session-snapshot': {
         resetToolCollapseState();
+        this.hidePopup();
+        this.followOutput = true;
         this.previewRegistry.clear();
         const d = msg.data;
         this.session = {
@@ -331,6 +255,8 @@ export class ChatApp {
       }
       case 'session-closed':
         resetToolCollapseState();
+        this.hidePopup();
+        this.followOutput = true;
         if (this.session) {
           try { localStorage.removeItem(`zcode.ctxSnapshot.${this.session.info.sessionId}`); } catch { /* 同上 */ }
         }
@@ -620,7 +546,6 @@ export class ChatApp {
       if (p.type === 'text') {
         const tp = p as unknown as { text?: string };
         target.textContent = tp.text ?? '';
-        // pre-wrap 原文模式 + 流式块状光标（caret-blink）；全量重建时这两类随节点消失
         target.classList.add('raw', 'streaming');
       } else if (p.type === 'reasoning') {
         const body = target.querySelector('.reasoning-body') as HTMLElement | null;
@@ -717,28 +642,7 @@ export class ChatApp {
   }
 
   /** 上下文圆环：SVG 进度环，颜色随占用率绿→黄→橙红 */
-  renderContextRing(): void {
-    const proj = this.session?.projection;
-    const btn = this.ctxRingBtn;
-    const window = this.authoritativeWindow();
-    if (!proj || window <= 0) {
-      btn.classList.add('hidden');
-      btn.innerHTML = '';
-      return;
-    }
-    const used = Math.min(proj.contextUsed, window);
-    const pct = Math.round((used / window) * 100);
-    const r = 6.5;
-    const c = 2 * Math.PI * r;
-    const color = pct < 60 ? 'var(--vscode-charts-green)' : pct < 85 ? 'var(--vscode-charts-yellow)' : 'var(--vscode-charts-orange)';
-    btn.classList.remove('hidden');
-    btn.title = `${this.t('context')} ${pct}% · ${formatTokens(used)}/${fmtContext(window)} ${this.t('tokens')}`;
-    btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-<circle cx="8" cy="8" r="${r}" fill="none" stroke="var(--vscode-panel-border,rgba(128,128,128,.35))" stroke-width="2.4"/>
-<circle cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round"
-    stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${(c * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 8 8)"/>
-</svg>`;
-  }
+  renderContextRing(): void { renderContextRingDom(this); }
 
   /** 进程面板：最近一次 TodoWrite 的任务进展常驻展示（推导式，消息集变化时刷新） */
   private refreshTodoPanel(): void {
@@ -750,38 +654,17 @@ export class ChatApp {
   }
 
   /** 运行态判定：回合运行/等待权限/后台任务任一为真 */
-  private isBusyLike(): boolean {
+  isBusyLike(): boolean {
     const st = this.session?.projection.status;
     return st === 'running' || st === 'waiting' || (this.session?.projection.backgroundJobs?.length ?? 0) > 0;
   }
 
   // ═══════════════ 头部 / 状态 / 浮层 ═══════════════
 
-  private renderHeaderControls(): void {
-    if (!this.session) {
-      // 会话就绪前：模型给通用名，模式给默认值——chips 首帧即真名可点
-      this.modelBtn.textContent = 'GLM';
-      this.modeBtn.textContent = MODE_CHIP_LABEL[this.defaultMode] ?? this.defaultMode;
-      this.titleEl.textContent = this.t('appTitle');
-      return;
-    }
-    const cur = this.session.settings.model.current ?? this.session.settings.model.lastUsed;
-    const modelInfo = cur
-      ? this.session.settings.model.available.find((m) => m.ref.providerId === cur.providerId && m.ref.modelId === cur.modelId)
-      : undefined;
-    const modelLabel = cur ? modelInfo?.label ?? cur.modelId : '—';
-    // 对标 Claude Code 的 "glm-5.3-flash High"：模型名 + 推理档位
-    const level = cur?.options?.reasoningLevel;
-    this.modelBtn.textContent = level ? `${modelLabel} ${level[0].toUpperCase()}${level.slice(1)}` : modelLabel;
-    const mode = String(this.session.settings.mode.current ?? this.session.projection.mode ?? '');
-    this.modeBtn.textContent = '';
-    this.modeBtn.append(modeIconEl(mode));
-    this.modeBtn.title = MODE_CHIP_LABEL[mode] ?? mode;
-    this.titleEl.textContent = this.session.info.title || this.t('appTitle');
-  }
+  private renderHeaderControls(): void { renderHeaderControlsDom(this); }
 
   private renderBanner(): void {
-    // 对标 Claude Code：启动过程零横幅；失败走自动消失的错误气泡（重试入口在齿轮菜单）；
+    // 启动过程零横幅；失败走自动消失的错误气泡（重试入口在齿轮菜单）；
     // 仅环境缺失（需用户处理配置）保留常驻提示
     this.banner.classList.add('hidden');
     if (!this.environmentOk) {
@@ -798,36 +681,19 @@ export class ChatApp {
   }
 
   private renderOverlay(): void {
-    this.overlayEl.innerHTML = '';
-    if (!this.environmentOk) return; // banner 已提示
-    if (this.account && !this.account.loggedIn) {
-      this.messagesEl.style.display = 'none'; // 未登录必然无会话，收起消息区让登录门垂直居中
-      this.overlayEl.append(h('div', { class: 'gate' },
-        h('div', { class: 'gate-logo' }, 'Z'),
-        h('div', { class: 'gate-title' }, this.t('loginRequired')),
-        h('div', { class: 'gate-hint' }, this.t('loginHint')),
-        h('button', { class: 'gate-btn', onclick: () => this.post({ kind: 'login' }) }, this.t('login'))
-      ));
-      this.overlayEl.classList.add('visible');
-      return;
-    }
-    // 空会话即刻呈现欢迎页（不依赖草稿会话建立）：服务启动中显示启动提示
-    if (this.messages.size === 0) {
-      const idx = this.locale === 'zh-CN' ? 'zh' : 'en';
-      this.overlayEl.append(h('div', { class: 'gate subtle' },
-        zLogoEl(),
-        h('div', { class: 'gate-title' }, this.t('emptyTitle')),
-        h('div', { class: 'gate-hint' }, this.serverState === 'starting' ? this.t('starting') : this.t('emptyHint')),
-        h('div', { class: 'gate-suggestions' },
-          ...SUGGESTIONS.map((s) => h('button', { class: 'gate-suggestion', onclick: () => { this.composerInput.value = s[idx]; this.composerInput.focus(); } }, s[idx]))
-        )
-      ));
-      this.messagesEl.style.display = 'none'; // 空消息区收起，欢迎区垂直居中
-      this.overlayEl.classList.add('visible');
-      return;
-    }
-    this.messagesEl.style.display = '';
-    this.overlayEl.classList.remove('visible');
+    const loginRequired = Boolean(this.account && !this.account.loggedIn);
+    const visible = this.environmentOk && (loginRequired || this.messages.size === 0);
+    this.overlayEl.classList.toggle('visible', visible);
+    this.messagesEl.style.display = visible ? 'none' : '';
+    this.composerInput.placeholder = this.t(this.messages.size ? 'followupPlaceholder' : 'inputPlaceholder');
+    this.composerInput.setAttribute('aria-label', this.composerInput.placeholder);
+    this.jumpBtn.classList.toggle('hidden', visible || this.followOutput);
+    if (visible) renderWelcome(this.overlayEl, this.t, {
+      loginRequired, starting: this.serverState === 'starting',
+      login: () => this.post({ kind: 'login' }),
+      suggest: text => { this.composerInput.value = text; this.composerInput.focus(); this.onInput(); }
+    });
+    else this.overlayEl.replaceChildren();
   }
 
   renderStatus(): void {
@@ -836,44 +702,50 @@ export class ChatApp {
   }
 
   /**
-   * 发送按钮供能规则（对标 Claude Code）：
+   * 发送按钮供能规则：
    * 输入框有内容（文字/附件）→ 发送态（点击=入队发送）
    * 输入框为空且回合运行中 → 停止态（点击=中止）
    * 其余 → 发送态
    */
-  private updateSendAffordance(): void {
+  updateSendAffordance(): void {
     const running = this.isBusyLike();
     const hasContent = this.composerInput.value.trim().length > 0 || this.attachments.length > 0;
     const stopArmed = running && !hasContent;
-    if (stopArmed) {
-      this.sendBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor"/></svg>';
-      this.sendBtn.title = this.t('stop');
-    } else {
-      this.sendBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 2.2 14 8 3.2 13.8z" fill="currentColor"/></svg>';
-      this.sendBtn.title = this.t('send');
-    }
+    const label = this.t(stopArmed ? 'stop' : 'send');
+    this.sendBtn.replaceChildren(iconEl(stopArmed ? 'stop' : 'arrowUp'));
+    this.sendBtn.title = label;
+    this.sendBtn.setAttribute('aria-label', label);
     this.sendBtn.classList.toggle('stop', stopArmed);
+    this.sendBtn.disabled = !this.environmentOk || !this.account?.loggedIn || this.serverState !== 'ready'
+      || !this.session || this.pastePending.size > 0 || (!running && !hasContent);
   }
-
 
   showError(message: string): void {
     const existing = this.messagesEl.querySelector('.error-toast');
     existing?.remove();
-    this.messagesEl.append(h('div', { class: 'error-toast' }, `⚠ ${esc(message)}`));
+    this.messagesEl.append(h('div', { class: 'error-toast' }, message));
     this.scrollBottom();
     setTimeout(() => this.messagesEl.querySelector('.error-toast')?.remove(), 8000);
   }
 
   // ═══════════════ 弹层委托（./menus 的唯一入口；slash/@ 弹层在本层直接用 showPopup 设施） ═══════════════
 
-  private get popupEl(): HTMLElement { return this.menus.popupEl; }
-  private showPopup(anchor: HTMLElement, content: HTMLElement): void { this.menus.showPopup(anchor, content); }
-  private hidePopup(): void { this.menus.hidePopup(); }
+  get popupEl(): HTMLElement { return this.menus.popupEl; }
+  showPopup(anchor: HTMLElement, content: HTMLElement): void { this.menus.showPopup(anchor, content); }
+  hidePopup(): void { this.menus.hidePopup(); }
   private toggleModelMenu(): void { this.menus.toggleModelMenu(); }
   private toggleSettingsMenu(): void { this.menus.toggleSettingsMenu(); }
   private renderMcpMenu(): void { this.menus.renderMcpMenu(); }
   private toggleModeMenu(): void { this.menus.toggleModeMenu(); }
   private toggleSessionsMenu(): void { this.menus.toggleSessionsMenu(); }
+  handleComposerKeydown(e: KeyboardEvent): boolean { return this.menus.handleComposerKeydown(e); }
+  conversationText(): string {
+    return [...this.messages.values()]
+      .filter(m => m.info.visibility !== 'model-only')
+      .map(m => m.parts.filter(p => p.type === 'text' && !(p as { ignored?: boolean }).ignored && !isSystemReminderText(String((p as { text?: string }).text ?? '')))
+        .map(p => String((p as { text?: string }).text ?? '')).join('\n'))
+      .filter(Boolean).join('\n\n');
+  }
   /** 菜单是否正锚定在该按钮上打开（./events 的圆环刷新也走这里） */
   isOpenFor(anchor: HTMLElement): boolean { return this.menus.isOpenFor(anchor); }
   toggleContextMenu(refresh = false): void { this.menus.toggleContextMenu(refresh); }
@@ -881,345 +753,34 @@ export class ChatApp {
 
   // ═══════════════ 附件与 @ 引用 ═══════════════
 
-  /** 排队管理器：每条显示全文 + 立即发送（插队）+ 删除。
-   *  指纹跳过 + 旧条目免动画：全量重建会重放 fade-up 入场动画——插队/出连推两次更新时整行反复闪烁 */
-  private queueSig = '';
-  private queueSeenIds = new Set<string>();
+  private renderQueued(): void { this.composer.renderQueued(); }
 
-  private renderQueued(): void {
-    if (this.queuedCount <= 0 || !this.queuedItems.length) {
-      this.queuedCount = 0;
-      this.queuedItems = [];
-      this.queueSig = '';
-      this.queueSeenIds.clear();
-      this.queuedEl.innerHTML = '';
-      this.queuedEl.classList.add('hidden');
-      return;
-    }
-    const sig = `${this.queuedCount}\u0000${this.queuedItems.map((q) => `${q.id}\u0000${q.content}`).join('\u0001')}`;
-    if (sig === this.queueSig) return; // 内容未变：连发的 queued-update 不重建不闪
-    const prevIds = this.queueSeenIds;
-    this.queueSeenIds = new Set(this.queuedItems.map((q) => q.id));
-    this.queueSig = sig;
-    this.queuedEl.classList.remove('hidden');
-    this.queuedEl.innerHTML = '';
-    for (const q of this.queuedItems) {
-      this.queuedEl.append(h('div', { class: `queued-item${prevIds.has(q.id) ? ' queued-item-kept' : ''}` },
-        h('div', { class: 'queued-text', title: q.content }, q.content),
-        h('div', { class: 'queued-actions' },
-          h('button', {
-            class: 'queued-btn primary',
-            title: this.t('sendNow'),
-            onclick: () => this.post({ kind: 'prioritize-queue-item', id: q.id })
-          }, this.t('sendNow')),
-          h('button', {
-            class: 'queued-btn',
-            title: this.t('cancel'),
-            onclick: () => this.post({ kind: 'remove-queue-item', id: q.id })
-          }, '×')
-        )
-      ));
-    }
-  }
-
-  private renderAttachRow(): void {
-    this.attachRow.innerHTML = '';
-    if (!this.attachments.length) {
-      this.attachRow.classList.add('hidden');
-      return;
-    }
-    this.attachRow.classList.remove('hidden');
-    for (const a of this.attachments) {
-      const isImg = Boolean(a.dataUrl) || a.mime?.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(a.name);
-      const preview = isImg && a.dataUrl
-        ? h('img', { class: 'attach-thumb', src: a.dataUrl, alt: '' })
-        : null;
-      this.attachRow.append(h('span', { class: 'attach-chip', title: a.path },
-        preview,
-        h('span', { class: 'attach-chip-name' }, a.name),
-        h('button', { class: 'attach-chip-x', title: this.t('cancel'), onclick: () => {
-          this.attachments = this.attachments.filter((x) => x !== a);
-          this.renderAttachRow();
-          this.updateSendAffordance();
-        } }, '×')
-      ));
-    }
-  }
+  private renderAttachRow(): void { this.composer.renderAttachRow(); }
 
   /** @ 引用：输入框插入 @ 并弹出工作区文件过滤列表 */
-  private onAtReference(): void {
-    const input = this.composerInput;
-    input.focus();
-    const at = input.selectionStart ?? input.value.length;
-    input.value = input.value.slice(0, at) + '@' + input.value.slice(input.selectionEnd ?? at);
-    input.setSelectionRange(at + 1, at + 1);
-    this.onInput();
-  }
+  onAtReference(): void { this.composer.onAtReference(); }
 
   /** @ 引用弹层：目录浏览器——文件夹下钻、文件插入引用 */
-  private renderAtPopup(): void {
-    const input = this.composerInput;
-    const m = /@([^@\s]*)$/.exec(input.value.slice(0, input.selectionStart ?? input.value.length));
-    if (!m) {
-      this.hidePopup();
-      return;
-    }
-    const query = m[1];
-    // 输入含路径分隔 → 解析出目标目录与过滤词
-    const slash = query.lastIndexOf('/');
-    const dirPart = slash >= 0 ? query.slice(0, slash) : '';
-    const filterPart = (slash >= 0 ? query.slice(slash + 1) : query).toLowerCase();
-    if (this.dirEntries?.dir !== dirPart) {
-      this.atDir = dirPart;
-      this.post({ kind: 'list-files', dir: dirPart });
-      this.showPopup(input, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, '…')));
-      this.popupEl.classList.add('slash');
-      return;
-    }
-    const entries = (this.dirEntries?.dir === this.atDir ? this.dirEntries.entries : null) ?? [];
-    const matches = entries.filter((e) => e.name.toLowerCase().includes(filterPart)).slice(0, 14);
-    const list = h('div', { class: 'menu at-menu' });
-    list.append(h('div', { class: 'menu-group at-crumbs' }, this.atDir ? `@${this.atDir}/` : '@'));
-    // 返回上级
-    if (this.atDir) {
-      list.append(h('div', {
-        class: 'menu-item slash-item',
-        onclick: () => this.navigateAt(this.atDir.includes('/') ? this.atDir.slice(0, this.atDir.lastIndexOf('/')) : '')
-      }, h('span', { class: 'slash-name' }, '📁 ..')));
-    }
-    if (!matches.length && !this.atDir) {
-      list.append(h('div', { class: 'menu-empty' }, this.t('noResults')));
-    }
-    for (const e of matches) {
-      if (e.kind === 'dir') {
-        const dir = this.atDir ? `${this.atDir}/${e.name}` : e.name;
-        list.append(h('div', {
-          class: 'menu-item slash-item',
-          onclick: () => this.navigateAt(dir)
-        }, h('span', { class: 'slash-name' }, `📁 ${e.name}`)));
-      } else {
-        const file = this.atDir ? `${this.atDir}/${e.name}` : e.name;
-        list.append(h('div', {
-          class: 'menu-item slash-item',
-          onclick: () => {
-            input.value = input.value.replace(/@([^@\s]*)$/, `@${file} `);
-            this.hidePopup();
-            input.focus();
-          }
-        }, h('span', { class: 'slash-name' }, `📄 ${e.name}`)));
-      }
-    }
-    this.showPopup(input, list);
-    this.popupEl.classList.add('slash');
-    this.slashIndex = -1;
-  }
+  private renderAtPopup(): void { this.composer.renderAtPopup(); }
 
-  /** 下钻/返回目录：重写输入中的 @ 前缀并刷新列表 */
-  private navigateAt(dir: string): void {
-    const input = this.composerInput;
-    input.value = input.value.replace(/@([^@\s]*)$/, `@${dir ? dir + '/' : ''}`);
-    const pos = input.value.length;
-    input.setSelectionRange(pos, pos);
-    this.atDir = dir;
-    this.dirEntries = null;
-    this.post({ kind: 'list-files', dir });
-    this.showPopup(input, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, '…')));
-    this.popupEl.classList.add('slash');
-    input.focus();
-  }
+  onInput(): void { this.composer.onInput(); }
 
-  // ═══════════════ 输入 ═══════════════
-
-  private onKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Escape' && this.previewEl) {
-      this.closePreview();
-      return;
-    }
-    if (this.menus.handleComposerKeydown(e)) return;
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      this.onSend();
-    }
-  }
-
-  onInput(): void {
-    const input = this.composerInput;
-    input.style.height = 'auto';
-    input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
-    this.updateSendAffordance();
-    const v = input.value;
-    const atMatch = /@([^@\s]*)$/.exec(v.slice(0, input.selectionStart ?? v.length));
-    if (atMatch) {
-      this.renderAtPopup();
-      return;
-    }
-    if (v.startsWith('/')) {
-      const query = v.slice(1).split(' ')[0].toLowerCase();
-      const cmds = (this.session?.slashCommands ?? []).filter((c) => c.name.startsWith(query));
-      if (cmds.length) this.showSlashPopup(cmds);
-      else this.hidePopup();
-    } else {
-      this.hidePopup();
-    }
-  }
-
-  private showSlashPopup(cmds: { name: string; description: string }[]): void {
-    const list = h('div', { class: 'menu' });
-    for (const c of cmds.slice(0, 10)) {
-      list.append(h('div', {
-        class: 'menu-item slash-item',
-        onclick: () => {
-          this.composerInput.value = `/${c.name} `;
-          this.hidePopup();
-          this.composerInput.focus();
-          this.onInput();
-        }
-      },
-      h('span', { class: 'slash-name' }, `/${c.name}`),
-      h('span', { class: 'menu-item-meta' }, c.description.slice(0, 60))
-      ));
-    }
-    this.showPopup(this.composerInput, list);
-    this.popupEl.classList.add('slash');
-    this.slashIndex = -1;
-  }
-
-  private onSend(): void {
-    // 停止态判定：运行中/后台任务中且输入框为空 → 点击=中止
-    const running = this.isBusyLike();
-    const hasContent = this.composerInput.value.trim().length > 0 || this.attachments.length > 0;
-    if (running && !hasContent) {
-      this.post({ kind: 'stop' });
-      return;
-    }
-    const text = this.composerInput.value.trim();
-    if (!text) return;
-    this.composerInput.value = '';
-    this.composerInput.style.height = 'auto';
-    this.hidePopup();
-    const attachments = this.attachments.slice();
-    this.attachments = [];
-    this.renderAttachRow();
-    this.post({ kind: 'send', content: text, attachments: attachments.length ? attachments : undefined });
-    // 乐观渲染统一由 controller 的 optimistic-user 承担（受理后即时显示，防双份）
-  }
+  private onSend(): void { this.composer.onSend(); }
 
   /** 附件芯片点击：统一走 lightbox（图片放大预览；无数据时提示） */
   private onAttachmentClick(name: string, url?: string, _isImg?: boolean): void {
-    this.openPreview(name, url);
+    this.panels.openPreview(name, url);
   }
 
   /** 回填消息内图片附件的缩略图 src（registry 命中时）——每次渲染后调用 */
-  private hydrateAttachmentThumbs(): void {
-    this.messagesEl.querySelectorAll('.msg-attachment-img .msg-attach-thumb').forEach((img) => {
-      const el = img as HTMLImageElement;
-      if (el.src) return;
-      const chip = el.closest('.msg-attachment-img') as HTMLElement | null;
-      const name = chip?.querySelector('.attach-chip-name')?.textContent ?? '';
-      const data = this.previewRegistry.get(name);
-      if (data) el.src = data;
-    });
-  }
+  private hydrateAttachmentThumbs(): void { this.composer.hydrateAttachmentThumbs(); }
 
-  /** 附件预览 lightbox：点击聊天里的附件芯片弹出大图（Esc/点击背景关闭） */
-  private openPreview(name: string, url?: string): void {
-    const src = this.previewRegistry.get(name)
-      ?? (url && /^(data:|https?:)/.test(url) ? url : undefined);
-    this.closePreview();
-    if (!src) {
-      this.showError(this.locale === 'zh-CN' ? '该附件无预览数据' : 'No preview data for this attachment');
-      return;
-    }
-    const isImg = /^data:image\//.test(src) || /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(url ?? name) || this.previewRegistry.has(name);
-    const box = h('div', { class: 'preview-backdrop' });
-    const body = isImg
-      ? h('img', { class: 'preview-img', src, alt: name })
-      : h('iframe', { class: 'preview-frame', src, title: name });
-    const close = h('button', { class: 'preview-close', title: this.t('cancel') }, '×');
-    (close as HTMLElement).addEventListener('click', (e) => { e.stopPropagation(); this.closePreview(); });
-    (box as HTMLElement).addEventListener('click', () => this.closePreview());
-    (body as HTMLElement).addEventListener('click', (e) => e.stopPropagation());
-    box.append(body, close, h('div', { class: 'preview-name' }, name));
-    this.root.append(box);
-    this.previewEl = box;
-    box.focus?.();
-  }
-
-  private closePreview(): void {
-    this.previewEl?.remove();
-    this.previewEl = null;
-  }
-
-  // ═══════════════ 手机配对面板（backdrop 固定弹层，openPreview 同款模式） ═══════════════
+  closePreview(): void { this.panels.closePreview(); }
 
   /** 打开配对面板并请求宿主回推当前状态（常驻连接下通常已有缓存即时可显） */
-  openPairPanel(): void {
-    this.closePairPanel();
-    this.post({ kind: 'pair-phone' });
-    this.renderPairPanel();
-  }
+  openPairPanel(): void { this.panels.openPairPanel(); }
 
-  private closePairPanel(): void {
-    this.pairEl?.remove();
-    this.pairEl = null;
-  }
-
-  private renderPairPanel(): void {
-    this.closePairPanel();
-    const p = this.pairPanel;
-    const status = p?.status ?? 'starting';
-    const statusLabel =
-      status === 'waiting' ? this.t('pairWaiting')
-      : status === 'active' ? this.t('pairActive')
-      : status === 'error' ? this.t('pairError')
-      : status === 'idle' ? this.t('pairStopped')
-      : this.t('pairStarting');
-    const box = h('div', { class: 'preview-backdrop pair-backdrop' });
-    (box as HTMLElement).addEventListener('click', () => this.closePairPanel());
-    const card = h('div', { class: 'pair-card' });
-    (card as HTMLElement).addEventListener('click', (e) => e.stopPropagation());
-
-    const head = h('div', { class: 'pair-head' }, phoneIconEl(), h('span', {}, this.t('pairTitle')));
-    const stateRow = h('div', { class: `pair-state ${status}` },
-      h('span', { class: 'pair-dot' }),
-      h('span', {}, statusLabel)
-    );
-    const qrBox = h('div', { class: 'pair-qr' });
-    // starting（重连中）保留上次二维码置灰显示——QR→"…"→QR 的来回替换就是肉眼闪烁
-    if (p?.qrSvg) {
-      this.lastPairSvg = p.qrSvg;
-    }
-    const svg = p?.qrSvg ?? (status === 'starting' ? this.lastPairSvg : null);
-    if (svg) {
-      qrBox.innerHTML = svg;
-      if (!p?.qrSvg) qrBox.classList.add('stale');
-    } else if (status === 'starting' || status === 'waiting') {
-      qrBox.append(h('div', { class: 'pair-qr-pending' }, '…'));
-    }
-    if (p?.message) {
-      stateRow.append(h('div', { class: 'pair-message' }, p.message));
-    }
-    const hint = h('div', { class: 'pair-hint' }, this.t('pairHint'));
-    const busyHint = h('div', { class: 'pair-hint sub' }, this.t('pairBusyHint'));
-    const identityHint = p?.identity ? h('div', { class: 'pair-hint sub' }, p.identity) : null;
-    const actions = h('div', { class: 'pair-actions' });
-    if (p?.qrUrl) {
-      actions.append(h('button', { class: 'pair-btn', onclick: () => this.post({ kind: 'pair-copy-link', url: p.qrUrl! }) }, this.t('pairCopyLink')));
-    }
-    actions.append(h('button', { class: 'pair-btn', onclick: () => this.post({ kind: 'pair-refresh' }) }, this.t('pairRefresh')));
-    actions.append(
-      status === 'idle'
-        ? h('button', { class: 'pair-btn primary', onclick: () => this.post({ kind: 'pair-phone' }) }, this.t('pairPhone'))
-        : h('button', { class: 'pair-btn', onclick: () => this.post({ kind: 'pair-stop' }) }, this.t('pairStop'))
-    );
-    const close = h('button', { class: 'preview-close', title: this.t('cancel') }, '×');
-    (close as HTMLElement).addEventListener('click', (e) => { e.stopPropagation(); this.closePairPanel(); });
-
-    card.append(head, stateRow, qrBox, hint, busyHint, ...(identityHint ? [identityHint] : []), actions);
-    box.append(card, close);
-    this.root.append(box);
-    this.pairEl = box;
-  }
+  private renderPairPanel(): void { this.panels.renderPairPanel(); }
 
   private isNearBottom(): boolean {
     const el = this.messagesEl;
@@ -1228,7 +789,9 @@ export class ChatApp {
 
   scrollBottom(): void {
     requestAnimationFrame(() => {
+      if (!this.followOutput) return;
       this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      this.jumpBtn.classList.add('hidden');
     });
   }
 }

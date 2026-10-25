@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 无依赖（Locale 为类型导入）
- * [OUTPUT]: 对外提供 formatTokens/fmtContext/sourceLabel/sourceColor/formatTokensLocale/fmtContextLocale 展示格式化工具与 extractContentTexts/normalizeToolOutputText 工具输出规整
- * [POS]: webview 的数字、标签与工具输出文本规整层，chat.ts（上下文圆环）、menus.ts（上下文菜单）、events.ts（工具结果提取）与 render.ts（工具卡输出渲染）消费
+ * [OUTPUT]: 对外提供 reasoningChoices 三档映射与 formatTokens/fmtContext/sourceLabel/sourceColor/formatTokensLocale/fmtContextLocale 展示格式化工具与 extractContentTexts/normalizeToolOutputText 工具输出规整
+ * [POS]: webview 的数字、思考强度标签与工具输出文本规整层，chat.ts（上下文圆环）、menus.ts（上下文菜单）、events.ts（工具结果提取）与 render.ts（工具卡输出渲染）消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { Locale } from './i18n';
@@ -12,6 +12,22 @@ export function formatTokens(n: number): string {
 
 export function fmtContext(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(0)}M` : `${Math.round(n / 1000)}K`;
+}
+
+/** 模型原始档位收敛为低/中/高；缺档置灰，旧会话的中间值归入最近档。 */
+export function reasoningChoices(levels: { value: string }[], current: string | undefined, locale: string) {
+  const last = levels.length - 1;
+  const positions = levels.length >= 3 ? [0, Math.floor(last / 2), last]
+    : levels.length === 2 ? [0, -1, last] : [-1, -1, last];
+  const currentIndex = levels.findIndex(level => level.value === current);
+  const closest = positions.reduce((best, pos, tier) => pos >= 0 && (best < 0
+    || Math.abs(pos - currentIndex) < Math.abs(positions[best] - currentIndex)) ? tier : best, -1);
+  const labels = locale === 'zh-CN' ? ['低', '中', '高'] : ['Low', 'Medium', 'High'];
+  return positions.map((pos, tier) => ({
+    value: pos >= 0 ? levels[pos]?.value : undefined,
+    label: labels[tier],
+    selected: currentIndex >= 0 && closest === tier
+  }));
 }
 
 /** 中文计量（对标桌面端"31.6万/100万"）；英文沿用 k/M */

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 消费 ../bridge 的 QuotaUsagePayload、./render 的 h、./i18n 的 Translate
- * [OUTPUT]: 对外提供 createQuotaRings（输入工具栏的 5 小时/每周套餐用量双圆环）、quotaRingSvg/fmtIn（弹层复用的环 SVG 与倒计时文案）
- * [POS]: webview 的套餐额度层，chat.ts buildShell 挂载于 composer-bar-right 首位（ctx 环左侧），quota-usage 消息驱动 update；点击弹窗见 menus.ts toggleQuotaMenu
+ * [OUTPUT]: createQuotaRings（可键盘激活的套餐用量按钮）、quotaRingSvg/fmtIn（弹层复用的 SVG 与倒计时）
+ * [POS]: webview 套餐额度层，shell.ts 挂载于 composer-status；quota-usage 驱动 update，menus.ts 展示详情
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
  * 视觉与 ctx-ring-btn 完全同款（16px 环 + 2.4 线宽 + charts 色梯度）；
@@ -43,7 +43,7 @@ export interface QuotaRings {
 }
 
 export function createQuotaRings(): QuotaRings {
-  const el = h('div', { class: 'quota-rings hidden' });
+  const el = h('button', { type: 'button', class: 'quota-rings hidden', 'aria-haspopup': 'menu' });
   const five = h('span', { class: 'quota-ring hidden' });
   const week = h('span', { class: 'quota-ring hidden' });
   el.append(five, week);
@@ -71,6 +71,7 @@ export function createQuotaRings(): QuotaRings {
       // 套餐等级只标注一次：5h 环已带则周环不带
       renderRing(week, p.weekly, t('quotaWeekly'), p.fiveHour ? '' : lvl, t, locale);
       el.classList.toggle('hidden', !p.fiveHour && !p.weekly);
+      el.setAttribute('aria-label', [t('quotaPlanUsage'), five.title, week.title].filter(Boolean).join(' · '));
     }
   };
 }

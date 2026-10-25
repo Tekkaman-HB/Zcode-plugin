@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 消费 ../protocol/types 的消息部件类型、./markdown、./format 的 normalizeToolOutputText、./i18n；流式活性由 chat.ts 经 renderMessage opts.live 传入（尾部件继承）
- * [OUTPUT]: 对外提供 h()/esc()/jsonBlock()/diffBlock()/htmlFragment()/isAskUserQuestion()/isTodoWrite()/isSystemReminderText() 工具与 renderMessage（可返回 null=整条被过滤）/renderPart 部件渲染器（AskUserQuestion 问答摘要卡、TodoWrite 任务清单卡——默认折叠；思考中占位与流式推理摘要共用像素网格+shimmer+秒表动效（锚点跨重建续秒，节点脱离 DOM 自清 interval=输出到达即停），推理块落档后定格"思考过程"；system-reminder 元文本与 info.visibility=model-only 的服务端注入（todo 提醒/后台任务，无标签裸文本）整段过滤，不渲染空壳）
+ * [INPUT]: 消费 ../../protocol/types、./markdown、./format、./i18n、./icons 与 ./clipboard；流式活性由 chat.ts 传入
+ * [OUTPUT]: DOM/消息/部件/diff 渲染器；命令状态与真实输入摘要、流式工具输出、工具折叠记忆、消息/代码复制与思考反馈
  * [POS]: webview 的渲染层——纯函数式 DOM 构建，chat.ts 持有状态并调用；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -17,6 +17,8 @@ import type {
 import { renderMarkdown } from './markdown';
 import { normalizeToolOutputText } from './format';
 import type { Translate } from './i18n';
+import { iconEl } from './icons';
+import { copyButton } from './clipboard';
 
 // ═══════════════ DOM 工具 ═══════════════
 
@@ -92,18 +94,12 @@ export function isSystemReminderText(text: string): boolean {
 
 // ═══════════════ 工具卡片 ═══════════════
 
-const TOOL_STATUS_ICON: Record<string, string> = {
-  pending: '◌',
-  running: '▶',
-  completed: '✓',
-  error: '✕',
-  denied: '⊘'
-};
 
-/** 用户手动折叠的 partId 集合：重渲染（流式 delta/回合结束校准）时保持折叠选择，其余一律默认展开 */
+
+/** 用户手动折叠的 partId 集合：重渲染时保持折叠选择；未选择的普通工具默认折叠，错误展开 */
 const userCollapsed = new Set<string>();
 
-/** 用户手动展开的 partId 集合：TodoWrite 卡默认折叠（清单已由进程面板常驻展示，消息流卡仅留审计），展开选择同样跨重渲染保留 */
+/** 用户手动展开的 partId 集合：手动展开的工具保持展开，展开选择同样跨重渲染保留 */
 const userExpanded = new Set<string>();
 
 /** 会话切换时清空折叠/展开记忆与思考计时锚点 */
@@ -116,11 +112,9 @@ export function resetToolCollapseState(): void {
 /** 思考计时锚点（key → 起始时刻）：占位/推理块节点重建不重置秒表；节点脱离 DOM=锚点清理 */
 const thinkingStarts = new Map<string, number>();
 
-/** 像素网格加载器（对标 Beautiful UI Loading State）：3×3 圆点错峰点亮 */
+/** 旋转环加载器，状态文字与秒表提供持续反馈 */
 function pixelGrid(): HTMLElement {
-  const grid = h('span', { class: 'think-pixel' });
-  for (let i = 0; i < 9; i++) grid.append(h('span', { class: 'think-px', style: `animation-delay:${(i % 3) * 140 + Math.floor(i / 3) * 90}ms` }));
-  return grid;
+  return h('span', { class: 'think-pixel', 'aria-hidden': 'true' });
 }
 
 /** 自清生命周期秒表 span：每秒自增，节点脱离 DOM 即停表并清理锚点（思考占位与流式推理摘要共用） */
@@ -143,7 +137,7 @@ function elapsedSecsSpan(key: string): HTMLElement {
 }
 
 /**
- * 思考中占位（像素网格加载器 + shimmer 文字 + 动态秒表——原常驻 thinking-cursor 的同款特效，
+ * 思考中占位（旋转环 + 思考文字 + 动态秒表，
  * 点阵动画走 CSS，interval 每秒只刷秒数）；interval 以 isConnected 自判生命周期——
  * 内容到达后占位节点被移除，计时随之停止；下一段思考（新消息）从 0s 重新计
  */
@@ -160,14 +154,28 @@ function liveReasoningSummary(partId: string, t: Translate): HTMLElement {
 export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
   const st = part.state as { status?: string; output?: string; error?: string; title?: string; input?: unknown };
   const status = st?.status ?? 'pending';
-  const summary = st?.title || (typeof st?.input === 'object' && st?.input !== null
+  const isCommand = /bash|exec|command|shell|terminal/i.test(part.tool);
+  const input = st?.input && typeof st.input === 'object' ? st.input as Record<string, unknown> : undefined;
+  const command = isCommand && typeof input?.command === 'string' ? input.command
+    : isCommand && typeof input?.cmd === 'string' ? input.cmd : undefined;
+  const summary = command || (st?.title?.trim().toLowerCase() !== part.tool.trim().toLowerCase() ? st?.title : '') || (typeof st?.input === 'object' && st?.input !== null
     ? summarizeInput(st.input as Record<string, unknown>)
     : String(st?.input ?? '').slice(0, 120));
+  const stopped = ['interrupted', 'cancelled', 'canceled'].includes(status);
+  const label = !isCommand ? part.tool : t(status === 'completed' ? 'commandRan'
+    : status === 'error' ? 'commandFailed' : status === 'denied' ? 'commandDenied'
+    : stopped ? 'commandStopped' : status === 'pending' ? 'commandPending' : 'commandRunning');
 
-  const header = h('div', { class: 'tool-card-header' },
-    h('span', { class: `tool-status-icon tool-status-${status}` }, TOOL_STATUS_ICON[status] ?? '◌'),
-    h('span', { class: 'tool-card-name' }, part.tool),
-    h('span', { class: 'tool-card-summary' }, summary)
+  const toolIcon = status === 'running' || status === 'pending' ? 'spinner'
+    : status === 'error' || status === 'denied' ? 'close'
+    : stopped ? 'stop'
+    : isCommand ? 'terminal'
+    : /edit|write|read|file/i.test(part.tool) ? 'file'
+    : /search|grep|glob/i.test(part.tool) ? 'search' : 'code';
+  const header = h('button', { type: 'button', class: 'tool-card-header' },
+    h('span', { class: `tool-status-icon tool-status-${status}`, title: status }, iconEl(toolIcon)),
+    h('span', { class: 'tool-card-name' }, label),
+    h('span', { class: 'tool-card-summary', title: summary }, summary)
   );
   /** 摘要替换（AskQ/Write/Edit 分支共用）：span 重建后 textContent 安全赋值 */
   const setSummary = (text: string) => {
@@ -179,7 +187,6 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
 
   const body = h('div', { class: 'tool-card-body' });
   // Edit/MultiEdit：old_string/new_string → diff 行（删红/增绿）；Write：content 全绿（新建文件）
-  const input = st?.input as Record<string, unknown> | undefined;
   // AskUserQuestion：问题→答案 摘要（对标桌面端 ask-question 渲染器），替代裸 JSON
   const isAskQ = isAskUserQuestion(part.tool, input);
   const isTodo = !isAskQ && isTodoWrite(part.tool, input);
@@ -194,7 +201,7 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
       for (const td of todos) {
         const st = td.status === 'completed' ? 'completed' : td.status === 'in_progress' ? 'running' : 'pending';
         list.append(h('div', { class: `todo-item todo-${st}` },
-          h('span', { class: `todo-dot todo-dot-${st}` }, st === 'completed' ? '✓' : ''),
+          h('span', { class: `todo-dot todo-dot-${st}` }, st === 'completed' ? iconEl('check') : null),
           h('span', { class: 'todo-text' }, td.content ?? '')));
       }
       body.append(list);
@@ -227,16 +234,19 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
       body.append(h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, 'new'),
         h('pre', { class: 'json-block diff-add' }, input.new_string)));
     }
+  } else if (command) {
+    body.append(h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, t('commands')),
+      h('pre', { class: 'json-block tool-command' }, command)));
   } else {
     if (st?.input !== undefined && st?.input !== null && status !== 'pending') {
       body.append(h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, t('toolInput')), jsonBlock(st.input)));
     }
   }
-  if (!isAskQ && !isTodo && status === 'completed' && st?.output) {
+  if (!isAskQ && !isTodo && st?.output) {
     // 权威刷新路径的 output 可能是 CLI 序列化拍平的内容块 JSON（换行逃逸成字面 \n）——渲染前还原
     body.append(h('div', { class: 'tool-card-section' }, h('div', { class: 'tool-card-label' }, t('toolOutput')), jsonBlock(normalizeToolOutputText(st.output))));
   }
-  if (status === 'error' && st?.error) {
+  if ((status === 'error' || status === 'denied') && st?.error) {
     body.append(h('div', { class: 'tool-card-section error' }, h('div', { class: 'tool-card-label' }, t('error')), jsonBlock(st.error)));
   }
 
@@ -245,37 +255,21 @@ export function renderToolPart(part: ToolPart, t: Translate): HTMLElement {
     body.children.length ? body : null
   );
   if (body.children.length) {
-    // 折叠状态由 .collapsed 类驱动（body 默认显示）；默认一律展开（Bash/Edit 内容直接可见），
-    // 仅用户手动折叠过的 partId 保持折叠——流式重渲染不会弹开用户的选择；
-    // 例外：TodoWrite 卡默认折叠（进程面板常驻展示清单），用户展开过则保持展开
-    const startCollapsed = isTodo ? !userExpanded.has(part.partId) : userCollapsed.has(part.partId);
-    const chevron = h('span', { class: 'tool-chevron' }, startCollapsed ? '▸' : '▾');
+    // 普通工具以摘要呈现，错误默认展开；手动选择在刷新之间保留。
+    const startCollapsed = userCollapsed.has(part.partId) || (!userExpanded.has(part.partId) && status !== 'error' && status !== 'denied');
+    const chevron = h('span', { class: 'tool-chevron' }, iconEl('chevronDown'));
+    header.setAttribute('aria-expanded', String(!startCollapsed));
     header.append(chevron);
-    (header as HTMLElement).addEventListener('click', () => {
-      if (isTodo) {
-        if (userExpanded.has(part.partId)) {
-          userExpanded.delete(part.partId);
-          card.classList.add('collapsed');
-          chevron.textContent = '▸';
-        } else {
-          userExpanded.add(part.partId);
-          card.classList.remove('collapsed');
-          chevron.textContent = '▾';
-        }
-      } else if (userCollapsed.has(part.partId)) {
-        userCollapsed.delete(part.partId);
-        card.classList.remove('collapsed');
-        chevron.textContent = '▾';
-      } else {
-        userCollapsed.add(part.partId);
-        card.classList.add('collapsed');
-        chevron.textContent = '▸';
-      }
+    header.addEventListener('click', () => {
+      const collapsed = card.classList.toggle('collapsed');
+      header.setAttribute('aria-expanded', String(!collapsed));
+      if (collapsed) { userCollapsed.add(part.partId); userExpanded.delete(part.partId); }
+      else { userExpanded.add(part.partId); userCollapsed.delete(part.partId); }
     });
     if (startCollapsed) {
       card.classList.add('collapsed');
     }
-  }
+  } else header.disabled = true;
   return card;
 }
 
@@ -353,7 +347,8 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
       }
     }
     if (!el2.children.length) return null; // 整条被过滤（如 system-reminder）→ 不渲染空壳
-    el.append(el2);
+    el.append(el2, h('div', { class: 'message-actions' }, copyButton(() =>
+      [...el2.querySelectorAll('.msg-user-text')].map(n => n.textContent ?? '').join('\n'), t)));
     return el;
   }
 
@@ -372,6 +367,11 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
     if (msg.parts.length === 0) el.append(thinkingPlaceholder(String(msg.info?.messageId ?? ''), t));
     else return null;
   }
+  if (hasContent && !opts?.live && msg.parts.some(p => p.type === 'text' && !(p as TextPart).ignored)) {
+    el.append(h('div', { class: 'message-actions' }, copyButton(() => msg.parts
+      .filter(p => p.type === 'text' && !(p as TextPart).ignored && !isSystemReminderText((p as TextPart).text))
+      .map(p => (p as TextPart).text).join('\n\n'), t)));
+  }
   return el;
 }
 
@@ -381,17 +381,17 @@ export function renderPart(p: MessagePart, t: Translate, tailLive = false): HTML
     case 'text': {
       const tp = p as unknown as import('../../protocol/types').TextPart;
       if (tp.ignored || !tp.text || isSystemReminderText(tp.text)) return null;
-      return h('div', { class: 'md', 'data-part-id': tp.partId }, htmlNode(renderMarkdown(tp.text)));
+      return h('div', { class: 'md', 'data-part-id': tp.partId }, markdownNode(tp.text, t));
     }
     case 'reasoning': {
       const rp = p as unknown as ReasoningPart;
       if (!rp.text) return null;
-      // 流式消息的尾部推理部件=正在思考 → 动态摘要（像素网格+思考中+秒表）；
+      // 流式消息的尾部推理部件=正在思考 → 动态摘要（旋转环+思考中+秒表）；
       // 后面出现输出部件或消息已落档 → 定格为"✻ 思考过程 ▸"存档态。
       // 摘要必须是 <summary> 元素：details 首子元素非 summary 时浏览器会渲染默认"详情"
       const summary = tailLive
         ? liveReasoningSummary(rp.partId ?? '', t)
-        : h('summary', {}, `✻ ${t('thoughtProcess')}`, h('span', { class: 'reasoning-chevron' }, '▸'));
+        : h('summary', {}, t('thoughtProcess'), h('span', { class: 'reasoning-chevron icon-svg' }, iconEl('chevronRight')));
       return h('details', { class: 'reasoning', 'data-part-id': rp.partId },
         summary,
         h('div', { class: 'md reasoning-body' }, htmlNode(renderMarkdown(rp.text)))
@@ -417,6 +417,20 @@ export function renderPart(p: MessagePart, t: Translate, tailLive = false): HTML
     default:
       return null; // snapshot/patch 等内部部件不渲染
   }
+}
+
+/** 代码块头部提供语言与复制；正文仍由同一 Markdown 渲染器负责。 */
+function markdownNode(text: string, t: Translate): DocumentFragment {
+  const fragment = htmlFragment(renderMarkdown(text));
+  fragment.querySelectorAll('pre').forEach(pre => {
+    const code = pre.querySelector('code');
+    const language = code?.className.match(/language-([\w+-]+)/)?.[1] ?? '';
+    const wrap = h('div', { class: 'code-block' });
+    pre.replaceWith(wrap);
+    wrap.append(h('div', { class: 'code-header' }, h('span', {}, language),
+      copyButton(() => code?.textContent ?? pre.textContent ?? '', t)), pre);
+  });
+  return fragment;
 }
 
 function htmlNode(html: string): Node {

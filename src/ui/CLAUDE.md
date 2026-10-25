@@ -8,6 +8,6 @@ chatProvider.ts: 聊天视图宿主（WebviewViewProvider），HTML/CSP 生成�
 
 ## 子目录
 
-webview/: webview 前端（见 webview/CLAUDE.md）
+webview/: ChatApp 共享状态与 shell/composer/panels 展示交互、events/queue/menus/render、分层主题 CSS（见 webview/CLAUDE.md）
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
