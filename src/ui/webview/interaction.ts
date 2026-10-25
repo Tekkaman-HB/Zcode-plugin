@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ../../protocol/types 的 PermissionRequestParams/UserInputRequestParams，./render 的 h()/jsonBlock()/htmlFragment()，./permPreview 的工具身份预览，./markdown，./i18n
- * [OUTPUT]: 对外提供 InteractionDraft 草稿类型与 renderPermissionCard()/renderUserInputCard() 交互焦点卡渲染器
+ * [OUTPUT]: 对外提供 InteractionDraft 与权限/问答焦点卡；模式切换等待批准使用静态提示
  * [POS]: webview 交互层——权限卡（选项排序/分类/键盘导航/问题向导/拒绝反馈/规则前缀）与用户输入卡（单题向导/自定义回答/preview），由 chat.ts 的交互焦点队列驱动；预览分流见 ./permPreview
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -362,9 +362,8 @@ export function renderPermissionCard(
   };
 
   if (preview.family === 'switchMode') {
-    // 计划模式退出无参数可审：占位动画（桌面端同款，不渲染 reason/预览）
+    // 计划模式退出无参数可审：静态等待批准提示，不渲染旋转图形或 reason/预览。
     card.append(h('div', { class: 'perm-placeholder' },
-      h('span', { class: 'perm-spinner' }, '◌'),
       h('span', {}, t('switchModePlaceholder'))));
   } else {
     const reason = displayReason(req);

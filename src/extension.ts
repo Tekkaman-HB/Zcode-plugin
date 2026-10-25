@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 vscode，消费 ./environment / ./account / ./serverManager / ./sessionController / ./ui/* / ./i18n / ./quotaUsage / ./pairingController
  * [OUTPUT]: 对外提供 activate / deactivate（插件生命周期入口）
  * [POS]: 激活中枢——装配环境探测、服务守护、会话控制、聊天侧栏视图与手机配对（常驻 relay 通道 + autoRestore）；
- *        globalState 持久化最近使用模式（新窗口/新会话延续）与配对身份
+ *        globalState 持久化最近使用模式与配对身份；globalStorageUri/session-diffs 持久化会话快照与扩展级只读快照文件系统，装配发送/实时事件/用户保存边界
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import * as vscode from 'vscode';
@@ -10,6 +10,8 @@ import { resolveEnvironment } from './environment';
 import { ZcodeServer } from './serverManager';
 import { SessionController } from './sessionController';
 import { ChatViewProvider, type ChatViewHost } from './ui/chatProvider';
+import { SessionChanges } from './ui/sessionChanges';
+import { SnapshotDocuments } from './ui/snapshotDocuments';
 import type { ToWebviewMessage } from './ui/bridge';
 import { detectLocale, makeT, type Locale, type StringKey } from './i18n';
 import { QuotaMonitor } from './quotaUsage';
@@ -56,8 +58,12 @@ export function activate(context: vscode.ExtensionContext): void {
   let server: ZcodeServer | null = null;
   let controller: SessionController | null = null;
 
+  const sessionDiffStorage = vscode.Uri.joinPath(context.globalStorageUri, 'session-diffs').fsPath;
+  const sessionChanges = new SessionChanges(sessionDiffStorage);
+  context.subscriptions.push(new SnapshotDocuments(sessionDiffStorage), sessionChanges, vscode.workspace.onDidSaveTextDocument(doc => sessionChanges.externalSave(doc.uri.fsPath)));
   const chatProvider = new ChatViewProvider({
     locale,
+    sessionChanges,
     extUri: context.extensionUri,
     env,
     server: () => server,
@@ -223,6 +229,15 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     const ctl = new SessionController(srv, {
       toWebview: (msg: ToWebviewMessage) => chatProvider.post(msg),
+      onBeforeSend: async sessionId => {
+        const preparing = setTimeout(() => chatProvider.post({ kind: 'session-changes', data: {
+          sessionId, status: 'preparing', files: 0, added: 0, deleted: 0, binary: 0
+        } }), 200);
+        try { await sessionChanges.beginTurn(sessionId, workspacePath()); }
+        finally { clearTimeout(preparing); }
+      },
+      onSendRejected: sessionId => { void sessionChanges.cancelTurn(sessionId); },
+      onSessionEvent: event => sessionChanges.observe(event),
       onModeChange: (mode) => {
         if (PICKABLE_MODES.has(mode)) void context.globalState.update(LAST_MODE_KEY, mode);
       },

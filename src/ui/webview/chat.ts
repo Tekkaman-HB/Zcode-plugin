@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 消费协议/bridge 契约、./events、./queue；委托 ./shell、./composer、./panels、./menus、./todoPanel、./quotaRings 与 ./render
- * [OUTPUT]: 对外提供 ChatApp，共享状态与桥接消息入口；快照复用/流式增量渲染、基于宿主 ready 状态的发送供能和滚动跟随
+ * [INPUT]: 消费协议/bridge 契约、./events、./queue；委托 ./shell、./changes、./composer、./panels、./menus、./todoPanel、./quotaRings 与 ./render
+ * [OUTPUT]: ChatApp 共享状态与桥接入口；按会话 id 分发 diff 汇总并在切换时清空旧摘要、流式分块 Markdown/工具复用、首响等待/空态同步、ready 发送和滚动跟随
  * [POS]: webview 中枢与各 Host 接口的实现者；布局、输入、模态和菜单分别由子模块负责
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -12,21 +12,19 @@ import type {
   UserInputRequestParams
 } from '../../protocol/types';
 import type { ToWebviewMessage, FromWebviewMessage, BootstrapPayload, DirEntry, AttachmentRef, QuotaUsagePayload, PairingPanelPayload } from '../bridge';
-import { h, renderMessage, resetToolCollapseState, isSystemReminderText } from './render';
+import { h, renderMessage, resetToolCollapseState, isSystemReminderText, updateStreamingText } from './render';
 import type { InteractionDraft } from './interaction';
 import { makeT, type Locale, type Translate } from './i18n';
 import { iconEl } from './icons';
-import { createChatShell, renderWelcome, renderContextRing as renderContextRingDom, renderHeaderControls as renderHeaderControlsDom } from './shell';
+import { createChatShell, renderWelcome, renderContextRing as renderContextRingDom, renderHeaderControls as renderHeaderControlsDom, renderStatus as renderStatusDom, renderResponseWait } from './shell';
 import { ComposerController } from './composer';
 import { PanelsController } from './panels';
-
+import { renderChangeSummary } from './changes';
 import { applySessionEvent, normalizeMessageId, type ChatSessionState, type MutableSessionMessage } from './events';
 import { renderPermissionCards } from './queue';
 import { MenuController } from './menus';
 import { extractLatestTodos, renderTodoPanel as renderTodoPanelDom, loadClosedTodoCallIds, saveClosedTodoCallIds } from './todoPanel';
 import { createQuotaRings } from './quotaRings';
-
-
 export class ChatApp {
   // ═══════════ 子模块宿主面（public：./events ./queue ./menus 经 Host 接口访问） ═══════════
   t: Translate;
@@ -178,6 +176,7 @@ export class ChatApp {
       mode: () => this.toggleModeMenu(),
       context: () => this.toggleContextMenu(),
       send: () => this.onSend(),
+      review: () => this.post({ kind: 'review-changes' }),
       latest: () => { this.followOutput = true; this.scrollBottom(); }
     }, this.quotaRingBtn, this.popupEl);
     Object.assign(this, shell);
@@ -196,7 +195,9 @@ export class ChatApp {
   // ═══════════════ 桥接消息入口 ═══════════════
 
   onMessage(msg: ToWebviewMessage): void {
+    if (msg.kind === 'session-snapshot' || msg.kind === 'session-closed') renderChangeSummary(this.root, { sessionId: '', status: 'ready', files: 0, added: 0, deleted: 0, binary: 0 }, this.t);
     switch (msg.kind) {
+      case 'session-changes': if (msg.data.sessionId === this.session?.info.sessionId) renderChangeSummary(this.root, msg.data, this.t); break;
       case 'bootstrap':
         this.locale = msg.data.locale;
         this.defaultMode = msg.data.defaultMode;
@@ -526,6 +527,8 @@ export class ChatApp {
         this.rendered.set(id, this.snapshotOf(m));
       }
       this.dirty.clear();
+      this.renderOverlay();
+      renderResponseWait(this);
       if (nearBottom) this.scrollBottom();
       this.hydrateAttachmentThumbs();
       this.refreshTodoPanel();
@@ -533,9 +536,9 @@ export class ChatApp {
   }
 
   /**
-   * 流式增量更新：只写已有 part 节点的文本内容（textContent——无 markdown 重解析、无 DOM 重建）。
+   * 流式增量更新：正文分块保留已完成 DOM，推理 textContent 直写，工具按内容指纹判断变化。
    * 返回 false 表示结构已变（新部件/工具状态变化），需要整消息重建。
-   * 回合结束后的 refresh-messages 全量重建会补上 markdown 渲染。
+   * 回合结束后的 refresh-messages 进行完整 Markdown 校准。
    */
   private updateMessageIncrementally(node: HTMLElement, m: MutableSessionMessage): boolean {
     for (const p of m.parts) {
@@ -545,16 +548,15 @@ export class ChatApp {
       if (!target) return false; // 新部件（tool/新文本块）→ 重建
       if (p.type === 'text') {
         const tp = p as unknown as { text?: string };
-        target.textContent = tp.text ?? '';
-        target.classList.add('raw', 'streaming');
+        updateStreamingText(target as HTMLElement, tp.text ?? '', this.t, () => this.scrollBottom());
       } else if (p.type === 'reasoning') {
         const body = target.querySelector('.reasoning-body') as HTMLElement | null;
         if (body) {
           body.textContent = (p as unknown as { text?: string }).text ?? '';
           body.classList.add('streaming');
         }
-      } else if (p.type === 'tool') {
-        return false; // 工具状态变化 → 重建（低频，可接受）
+      } else if (p.type === 'tool' && target.getAttribute('data-tool-state') !== JSON.stringify(p)) {
+        return false; // 只在工具内容变化时重建，既有工具不应阻断后续正文增量
       }
     }
     return true;
@@ -570,9 +572,9 @@ export class ChatApp {
   }
 
   /**
-   * diff 式重建：快照未变的消息节点原位保留（不重播 fade-up、不打断 raw 流式态），
-   * 只替换内容有差异的消息；流式中的当前消息即使快照变了也保留增量 raw 态——
-   * md 重建后下一个 delta 又转 raw，来回切换是"文字不断闪烁"的另一根因。
+   * diff 式重建：快照未变的消息节点原位保留，不重播 fade-up、不打断流式分块状态；
+   * 流式中的当前消息即使快照变了也保留增量 DOM，回合结束再完整校准。
+   * 工具事件拉取全量消息时，避免反复替换正在阅读的正文。
    * 权限卡/error-toast 无 data-message-id，不在清理范围。
    */
   private rebuildMessages(): void {
@@ -622,13 +624,16 @@ export class ChatApp {
         this.rendered.delete(id);
       }
     }
+    this.renderOverlay();
     renderPermissionCards(this);
+    renderResponseWait(this);
     this.scrollBottom();
     this.refreshTodoPanel();
   }
 
   markDirtyPermissions(): void {
     renderPermissionCards(this);
+    renderResponseWait(this);
   }
 
   /** 权威上下文窗口：当前模型在 available（配置权威列表）里的值；投影里的 200K 是降级值不可信 */
@@ -696,10 +701,7 @@ export class ChatApp {
     else this.overlayEl.replaceChildren();
   }
 
-  renderStatus(): void {
-    this.updateSendAffordance();
-    this.renderContextRing();
-  }
+  renderStatus(): void { renderStatusDom(this); }
 
   /**
    * 发送按钮供能规则：

@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 vscode，消费 ../sessionController、./bridge、../environment、../account、../pairingController（懒引用）
- * [OUTPUT]: 对外提供 ChatViewProvider（右侧栏聊天视图宿主）；send/set-model 桥接处理后经 onRefreshQuota 显式触发套餐用量刷新（新 key 的额度要跟上）；pair-* 消息路由到宿主 PairingController
+ * [INPUT]: 依赖 vscode，消费 ./changeReview、./sessionChanges、../sessionController、./bridge、../environment、../account、../pairingController（懒引用）
+ * [OUTPUT]: ChatViewProvider；桥接会话/配对/用量刷新，选择会话差异记录、推送摘要并管理原生 diff 审查视图；回合记录独立于视图
  * [POS]: ui 的聊天视图提供者，extension.ts 注册；与 webview/main.ts 通过 bridge 契约通信
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -17,6 +17,8 @@ import type { AccountStatus } from '../account';
 import type { SessionMode } from '../protocol/types';
 import type { Locale } from '../i18n';
 import type { PairingController } from '../pairingController';
+import { ChangeReview } from './changeReview';
+import type { SessionChanges } from './sessionChanges';
 
 /** 常见扩展名 → MIME（附件内联用） */
 const ATTACH_MIME: Record<string, string> = {
@@ -27,6 +29,7 @@ const ATTACH_MIME: Record<string, string> = {
 
 export interface ChatViewHost {
   locale: Locale;
+  sessionChanges: SessionChanges;
   extUri: vscode.Uri;
   env: ZcodeEnvironment;
   server: () => ZcodeServer | null;
@@ -50,6 +53,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private locale: Locale;
   private host: ChatViewHost;
   private lastAccount: AccountStatus | null = null;
+  private changes: ChangeReview | null = null;
 
   constructor(host: ChatViewHost) {
     this.host = host;
@@ -57,7 +61,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    this.changes?.dispose();
     this.view = view;
+    const changes = new ChangeReview(this.host.sessionChanges, this.locale,
+      data => this.post({ kind: 'session-changes', data }));
+    this.changes = changes;
+    view.onDidDispose(() => { changes.dispose(); if (this.view === view) { this.view = null; this.changes = null; } });
     const extRoot = this.host.extUri;
     view.webview.options = {
       enableScripts: true,
@@ -69,6 +78,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   post(msg: ToWebviewMessage): void {
     void this.view?.webview.postMessage(msg);
+    const changes = this.host.sessionChanges;
+    if (msg.kind === 'session-snapshot') changes.select(msg.data.session.sessionId, this.host.workspacePath(), msg.data.messages.some(message => message.info.role === 'user'));
+    else if (msg.kind === 'session-closed') changes.select(null, this.host.workspacePath());
+
   }
 
   /** webview 就绪后注入引导载荷 */
@@ -100,10 +113,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       switch (msg.kind) {
         case 'ready':
           this.bootstrap();
+          void this.changes?.refresh();
           // webview 重载（reload/内存回收后 resolveWebviewView 重新注入 HTML）状态清零：
           // 重投宿主侧留存的未答交互卡，否则 CLI 的 reannounce 兜不住跨重载投递，回合永久悬挂
           this.host.controller()?.redeliverPendingInteractions();
           this.host.onWebviewReady();
+          break;
+        case 'review-changes':
+          await this.changes?.review();
           break;
         case 'send': {
           if (!server || !controller) return;
@@ -146,8 +163,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const ext = (m2[1].split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
           const dir = path.join(os.tmpdir(), 'zcode-vscode-attachments');
           await fs.mkdir(dir, { recursive: true });
-          const name = `${msg.name.replace(/\.[^.]+$/, '') || 'image'}.${ext}`;
-          const file = path.join(dir, name);
+          // webview 提供的名称只保留安全 basename，并做根目录边界断言：任一防线失守即拒绝写盘
+          const stem = path.basename(msg.name.replace(/\.[^.]+$/, '') || 'image').replace(/[^a-zA-Z0-9._-]/g, '') || 'image';
+          const file = path.resolve(dir, `${stem}.${ext}`);
+          if (!file.startsWith(dir + path.sep)) break;
+          const name = path.basename(file);
           await fs.writeFile(file, Buffer.from(m2[2], 'base64'));
           this.post({ kind: 'image-saved', data: { path: file, name, mime: m2[1] } });
           break;

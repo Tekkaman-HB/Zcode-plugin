@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约、./remote 的 RelayTaskTarget 类型
- * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）；setMode 受理后主动回推 webview state-updated patch（模式芯片即时归位，不依赖 CLI 广播）；交互生命周期留痕（onInteractionLog → serverManager OutputChannel）与失效自卫（dropPendingInteractions 撤回时回发 interactions-dropped 清 webview 交互卡；对已失效请求的应答显式回执 error 提示而非静默吞掉）；手机端任务快照（mobileTasks 缓存 + refreshMobileTaskSnapshot 翻译 session/list、busy 会话标 running——回合结束/新建会话时刷新，onSnapshotChanged 通知宿主推手机）
+ * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；onBeforeSend 等待实际发送基线、onSendRejected 撤销基线、onSessionEvent 在当前会话 UI 过滤前提供实时事件；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）；setMode 受理后主动回推 webview state-updated patch（模式芯片即时归位，不依赖 CLI 广播）；交互生命周期留痕（onInteractionLog → serverManager OutputChannel）与失效自卫（dropPendingInteractions 撤回时回发 interactions-dropped 清 webview 交互卡；对已失效请求的应答显式回执 error 提示而非静默吞掉）；手机端任务快照（mobileTasks 缓存 + refreshMobileTaskSnapshot 翻译 session/list、busy 会话标 running——回合结束/新建会话时刷新，onSnapshotChanged 通知宿主推手机）
  * [POS]: 会话控制层——extension.ts 与 UI Provider 之间的业务中枢
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -14,6 +14,7 @@ import type {
   UserInputRequestParams,
   UserInputResponse,
   SessionMode,
+  SessionEvent,
   ModelSelection
 } from './protocol/types';
 import { asSessionEvent, asStateUpdated } from './protocol/types';
@@ -24,6 +25,11 @@ import type { RelayTaskTarget } from './remote';
 
 export interface SessionControllerCallbacks {
   toWebview: (msg: ToWebviewMessage) => void;
+  /** 实际发送前等待会话 diff 基线（队列出队共用）；拒绝发送则撤销本次捕获。 */
+  onBeforeSend?: (sessionId: string) => Promise<void>;
+  onSendRejected?: (sessionId: string) => void;
+  /** 原始会话事件先供差异归属记录，再按当前会话过滤 UI。 */
+  onSessionEvent?: (event: SessionEvent) => void;
   /** 有效模式落定上报（新建/恢复/用户切换/CLI 侧改模式）→ 宿主据此持久化"最近使用模式" */
   onModeChange?: (mode: SessionMode) => void;
   /** 交互生命周期诊断一行式 → serverManager.logInteraction（OutputChannel "Zcode Protocol"） */
@@ -113,6 +119,7 @@ export class SessionController {
       const ev = asSessionEvent(params);
       if (ev) {
         this.lastActivityAt = Date.now();
+        this.cbs.onSessionEvent?.(ev);
         if (this.currentSessionId && ev.sessionId && ev.sessionId !== this.currentSessionId) return;
         if (ev.type === 'turn.completed' || ev.type === 'turn.failed') {
           this.busy = false;
@@ -340,11 +347,15 @@ export class SessionController {
   }
 
   private async sendNow(content: string, attachments?: { name: string; path?: string; mime?: string; size?: number; dataUrl?: string }[]): Promise<void> {
+    const sessionId = this.currentSessionId;
+    if (!sessionId) return;
     this.busy = true;
     this.busySince = Date.now();
     try {
+      await this.cbs.onBeforeSend?.(sessionId);
+      if (sessionId !== this.currentSessionId) { this.cbs.onSendRejected?.(sessionId); return; }
       await this.server.request('session/send', {
-        sessionId: this.currentSessionId,
+        sessionId,
         content,
         // 附件 wire 契约（probe-attach 实证 zcodePromptAttachmentSchema）：
         // {kind:'image'|'video'|'pdf'|'file', filename, mimeType, localPath}——dataBase64 不送达，图片必须落盘走 localPath
@@ -369,6 +380,7 @@ export class SessionController {
         data: { id: `local-${Date.now()}`, text: content, attachments: attachments?.map((a) => ({ name: a.name })) }
       });
     } catch (e) {
+      this.cbs.onSendRejected?.(sessionId);
       // -32010（回合运行中）：busy 标志与服务器实际状态失步（事件错过）时的自愈——转排队而非报错
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('-32010') || /already running/i.test(msg)) {

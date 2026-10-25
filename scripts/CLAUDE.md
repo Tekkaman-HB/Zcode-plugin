@@ -12,7 +12,12 @@ ui-preview.mjs: 启动本地服务并打开四主题验收入口
 ui-preview.html: 真实产物 iframe 容器，四主题/聊天/空态/权限/问答切换与三栏比较
 ui-live.html: 加载真实 webview bundle 与 fixture，支持 theme/scene/locale/CSP 参数
 ui-fixtures.js: 无网络的消息桥与 UI 场景，模拟历史/附件/引用/权限/问答/上下文等交互；服务就绪使用宿主真实值 ready，GLM 档位使用 low/high/max
-theme-check.mjs: 真实产物浏览器回归，主题/窄栏/键盘/发送/附件/权限/问答/队列/滚动/复制/模态/错误与中英文；覆盖命令摘要去重/生命周期/输出/折叠、16px 权限盾牌、ready 重连、模型三档与列对齐
+tool-activity-check.mjs: theme-check 子模块；跨消息工具行 24px 连续排布、空文本/回合边界零占位、流式正文接管及 Codex 终端/铅笔/搜索/扳手语义与尺寸
+loading-check.mjs: theme-check 子模块；真实产物中复现推理夹杂工具刷新，验证扫光续播/无秒表定时器或旋转、四主题/减少动态效果/强制颜色及最终静态状态
+theme-check.mjs: 验证套餐/上下文圆环同排几何、16px 尺寸与统一间距，单/双环/无数据收起及键盘明细；调用 loadingChecks/toolActivityChecks 并执行真实产物浏览器回归，首响前立即展示/消息校准/推理和正文接管/终止与交互清理/运行会话恢复，以及主题/窄栏/键盘/发送/附件/权限/队列/滚动/复制/模态；覆盖无 diff 记录时摘要与入口隐藏、部分记录审查、语义图标/居中/警示色、段距、工具分组、流式稳定 DOM、ready 重连与模型三档
+git-changes-check.mjs: 私有快照+实际 Git 临时仓库与控制器/原生多文件 diff 桩回归；覆盖原有脏改动排除、多轮/切换/检查点中断恢复、外部保存/冲突/断档、发送/队列等待、迟到事件归属、项目 Git 零写入和路径边界、快照持久只读/二进制/缺失错误
+native-diff-test.ts: 独立 Extension Development Host 入口；真实 VSCode API 验证会话多文件标签、前后原文与资源只读、侧栏释放/文件系统重新注册
+native-diff-check.mjs: diff-smoke 驱动；隔离 VSCode 配置与扩展目录，启动测试入口，Playwright 检查原生 diff 红绿行与截图，无账户/模型请求
 
 ## 子目录
 

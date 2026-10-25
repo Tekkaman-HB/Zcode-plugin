@@ -1,6 +1,6 @@
 /**
  * [INPUT]: ./tokens.css 的语义变量；render/interaction/queue/todoPanel 生成的 DOM 与状态类
- * [OUTPUT]: 消息、Markdown/代码、16px 工具状态图标与命令摘要、diff、权限/问答和任务进度组件样式
+ * [OUTPUT]: 消息、段落/代码排版、居中思考箭头、24px 紧凑工具活动行/展开收起均四角圆润的标题栏/16px 静态语义图标、14px 细描边任务三态与任务扫光文字、diff、权限/问答和任务进度样式
  * [POS]: webview 内容组件层，被 styles.css 导入；折叠与焦点合同由 UI 回归守护
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -8,6 +8,7 @@
 .messages { flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 8px 16px 24px; scrollbar-gutter: stable; overscroll-behavior: contain; }
 /* 入场动画只给最新一条消息：流式增量不重建节点不重放；全量重建时历史不整屏闪 */
 .msg { margin: 16px auto; max-width: 760px; min-width: 0; }
+.msg-tool-only { margin-block: 0; }
 /* diff 更新替换已有消息（工具状态变化/校准）：抑制入场动画——否则每次替换都重播=闪烁 */
 .msg.replaced { animation: none; }
 .msg-user-block { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
@@ -15,25 +16,29 @@
 .msg-assistant { color: var(--ink); }
 .msg-thinking { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--ink-3); }
 
-/* 流式原文模式 + 块状光标（caret-blink） */
-.raw { white-space: pre-wrap; word-break: break-word; }
-.streaming.raw::after, .reasoning-body.streaming::after {
+/* 流式推理光标；正文在流式阶段直接使用 Markdown 排版。 */
+.reasoning-body.streaming::after {
   content: ''; display: inline-block; width: 7px; height: 14px; margin-left: 2px;
   vertical-align: text-bottom; background: var(--accent); border-radius: 2px;
   animation: caret-blink 1.06s steps(1) infinite;
 }
 
 /* Markdown 正文 */
-.md { font-size: var(--font-size); line-height: 1.7; color: var(--ink); overflow-wrap: anywhere; min-width: 0; }
-.md > * + * { margin-top: 8px; }
+.md { --md-space: .25em; font-size: var(--font-size); line-height: 1.625; color: var(--ink); overflow-wrap: anywhere; min-width: 0; }
+.msg-assistant > .md:not(:first-child), .msg-assistant > .tool-activity:not(:first-child) { margin-top: 12px; }
+.md > * + * { margin-top: calc(var(--md-space) * 2); }
 .md h1, .md h2, .md h3, .md h4 { font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; margin-top: 16px; }
 .md h1 { font-size: 17px; } .md h2 { font-size: 15.5px; } .md h3 { font-size: 14px; } .md h4 { font-size: 13px; }
 .md p { margin: 0; }
+.md > p:where(:not(:first-child)) { margin-top: calc(var(--md-space) * 2); }
+.md > p + p { margin-block: calc(var(--md-space) * 4); }
+.md > :last-child { margin-bottom: 0; }
+.md li > p + p { margin-top: calc(var(--md-space) * 4); }
 .md a { color: var(--link); text-decoration: none; border: none; }
 .md a:hover { text-decoration: underline; }
 .md strong { font-weight: 600; }
 .md code {
-  font-family: var(--font-mono); font-size: 11.5px; background: var(--inset);
+  font-family: var(--font-mono); font-size: .92em; background: var(--inset);
   border-radius: 3px; padding: 1px 5px; color: var(--ink);
   box-shadow: var(--shadow-hairline);
 }
@@ -58,12 +63,12 @@
 .reasoning > summary:hover { color: var(--ink-2); }
 .reasoning > summary::marker { content: none; }
 /* 展开箭头：随 details 开合旋转，亮度继承摘要文字 */
-.reasoning .reasoning-chevron { display: inline-block; transition: transform var(--dur) var(--ease-out); }
+.reasoning .reasoning-chevron { display: inline-flex; transition: transform var(--dur) var(--ease-out); }
 .reasoning[open] .reasoning-chevron { transform: rotate(90deg); }
-/* 流式推理摘要：像素网格 + 思考中 + 秒表（与思考占位同款动效），落定后换回静态"思考过程" */
+/* 流式推理与首响等待共用扫光文字，落定后换回静态“思考过程”。 */
 .reasoning > summary.reasoning-live { gap: 9px; }
 .reasoning-body { font-size: 12.5px; color: var(--ink-2); line-height: 1.6; margin: 4px 0 6px; padding-left: 10px; border-left: 1px solid var(--line); }
-.compaction-note, .timeline-note, .step-marker { font-size: 11.5px; color: var(--ink-3); text-align: center; padding: 3px 0; }
+.compaction-note, .timeline-note { font-size: 11.5px; color: var(--ink-3); text-align: center; padding: 3px 0; }
 .compaction-note { color: var(--ink-3); background: var(--inset); border-radius: var(--radius-chip); padding: 3px 10px; display: inline-block; }
 
 /* 附件芯片 */
@@ -81,20 +86,28 @@
 .msg-attach-thumb { width: 20px; height: 20px; border-radius: var(--radius-chip); object-fit: cover; flex: none; }
 .attach-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 思考占位（消息内）：旋转环 + shimmer 文字 + 秒表（旋转环 + 文字与秒表） */
-.think-pixel { display: inline-flex; width: 16px; height: 16px; border: 1.5px solid var(--line-strong); border-top-color: var(--ink-2); border-radius: 50%; animation: spin 1s linear infinite; flex: none; }
-.think-px { display: none; }
-.think-label { font-size: 12.5px; font-weight: 400; color: var(--ink-3); }
-.think-secs { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+/* 思考占位只保留扫光文字；没有旋转环和秒表。 */
+.think-label { font-size: 12.5px; font-weight: 400; }
 
-/* ═══════════ 工具卡片（对标 Tool Chips / Code Block 的内嵌语言） ═══════════ */
-.tool-card { background: transparent; border-radius: var(--radius-control); margin: 3px 0; box-shadow: none; overflow: hidden; }
-.tool-card-header { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 4px; border: none; background: transparent; color: var(--ink-2); text-align: left; cursor: pointer; }
+/* ═══════════ 工具活动摘要与详情 ═══════════ */
+.tool-activity > summary { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--ink-3); font-size: 12px; cursor: pointer; list-style: none; }
+.tool-activity > summary::-webkit-details-marker { display: none; }
+.tool-activity > summary:hover { color: var(--ink); }
+.tool-activity > summary > .icon-svg { width: 16px; height: 16px; }
+.activity-label { min-width: 0; overflow-wrap: anywhere; }
+.activity-chevron { transition: transform var(--dur) var(--ease-out); }
+.tool-activity[open] > summary > .activity-chevron { transform: rotate(90deg); }
+.tool-activity[data-failed="true"] > summary { color: var(--red); }
+.tool-activity > .tool-card { margin-left: 8px; }
+
+/* ═══════════ 单条工具卡片 ═══════════ */
+.tool-card { background: transparent; border-radius: var(--radius-control); margin: 0; box-shadow: none; overflow: hidden; }
+.tool-card-header { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 24px; padding: 2px 0; line-height: 20px; border: none; border-radius: var(--radius-control); background: transparent; color: var(--ink-2); text-align: left; cursor: pointer; }
 .tool-card-header:hover { background: var(--hover); }
 .tool-card-header:disabled { cursor: default; }
 .tool-card-header:disabled:hover { background: transparent; }
 .tool-card.collapsed .tool-card-body { border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--inset); margin: 0 0 8px 24px; overflow: hidden; }
-.tool-status-icon { width: 18px; height: 18px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-3); }
+.tool-status-icon { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-3); }
 .tool-status-icon > .icon-svg, .tool-chevron > .icon-svg { width: 16px; height: 16px; }
 .tool-status-completed { background: transparent; }
 .tool-status-error, .tool-status-denied { background: transparent; color: var(--red); }
@@ -127,24 +140,20 @@
 /* AskUserQuestion 问答摘要卡 */
 .qa-item { padding: 2px 0 2px 10px; border-left: 1px solid var(--line); margin: 5px 0; }
 
-/* TodoWrite 任务清单卡（对标桌面端 todo 渲染）：状态点三态 + 文案层次 */
+/* TodoWrite 任务清单卡：统一细描边状态图标 + 文案层次 */
 .todo-item { display: flex; align-items: center; gap: 9px; padding: 3px 0; font-size: 12.5px; min-width: 0; }
 .todo-dot {
-  width: 15px; height: 15px; border-radius: 50%; flex: none;
+  width: 14px; height: 14px; border-radius: 50%; flex: none; background: transparent;
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 9.5px; font-weight: 700; line-height: 1;
   transition: background-color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
 }
 /* 完成态 = 描边绿圈绿勾（透明底，对标桌面端 todo 卡），与 pending 灰圈以颜色+勾区分 */
 .todo-dot-completed { background: transparent; border: 1.5px solid var(--green); color: var(--green); }
-/* 进行中 = 旋转弧线 spinner（淡轨道+亮弧旋转）：与 pending 静态灰圈形状划清界限，一眼可辨 */
-.todo-dot-running {
-  border: 1.5px solid color-mix(in oklch, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
-  color: transparent;
-  animation: spin 0.9s linear infinite;
-}
-.todo-dot-pending { border: 1.5px solid var(--line-strong); color: transparent; }
+/* 进行中 = 细圈 + 小中心点，待处理 = 空心圈；图标静态，当前任务文字继续扫光。 */
+.todo-dot-running { border: 1.5px solid currentColor; color: var(--ink-3); }
+.todo-dot-running::before { content: ''; box-sizing: border-box; width: 4px; height: 4px; border: 2px solid currentColor; border-radius: 50%; }
+.todo-dot-pending { border: 1.5px solid var(--ink-3); color: transparent; }
 .todo-text { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
 /* 完成态：删除线 + 暗淡（对标桌面端 todo 卡） */
 .todo-completed .todo-text {
@@ -233,7 +242,6 @@
 
 /* 计划模式退出占位 */
 .perm-placeholder { display: flex; align-items: center; gap: 8px; padding: 8px 0 4px; font-weight: 500; color: var(--ink-2); font-size: 12.5px; }
-.perm-spinner { display: inline-block; color: var(--accent); animation: perm-spin 1.2s linear infinite; }
 
 /* 工具预览 */
 .perm-preview { margin: 6px 0; }
@@ -383,7 +391,6 @@
 .reasoning-chevron.icon-svg { width: 14px; height: 14px; }
 .reasoning > summary .reasoning-chevron { order: 1; }
 .reasoning[open] > summary .reasoning-chevron { transform: rotate(90deg); }
-.tool-status-running .icon-spinner, .tool-status-pending .icon-spinner { animation: spin 1s linear infinite; }
 .tool-card.collapsed .tool-card-body { display: none; }
 .md pre code { display: block; white-space: pre; }
 .md > :first-child { margin-top: 0; }

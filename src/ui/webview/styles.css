@@ -1,6 +1,6 @@
 /**
  * [INPUT]: ./tokens.css、./content.css 与 shell/composer/menus/panels 的 DOM
- * [OUTPUT]: 导航、一体式输入区（16px 权限盾牌）、欢迎页、弹层与响应式布局，思考强度横排三档、模型上下文列对齐
+ * [OUTPUT]: 导航、一体式输入区（16px 语义权限图标）、20px 整行居中的权限菜单、欢迎页与响应式布局，思考强度横排三档、模型上下文列对齐，底栏套餐与上下文圆环同排居中；统一处理中文字扫光，减少动态效果/强制颜色模式下静态可读
  * [POS]: webview 样式入口；主题令牌在 tokens.css，消息与交互组件在 content.css
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -14,10 +14,19 @@
 @keyframes caret-blink { 0%, to { opacity: 1; } 50% { opacity: 0; } }
 @keyframes shimmer-text { 0% { background-position: 150%; } to { background-position: -50%; } }
 @keyframes pixel-on { 0%, to { opacity: .15; } 18%, 42% { opacity: 1; } 62% { opacity: .15; } }
-@keyframes records-pulse { 0%, to { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
 @keyframes eq-bounce { 0%, to { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
-@keyframes spin { to { transform: rotate(1turn); } }
-@keyframes perm-spin { to { transform: rotate(360deg); } }
+
+/* ── 处理中：统一文字扫光，主题和减少动态效果下均保留可读文字 ── */
+.processing.processing {
+  color: transparent;
+  background: linear-gradient(100deg, var(--ink-3) 35%, var(--ink) 50%, var(--ink-3) 65%) 150% 0 / 250% 100%;
+  background-clip: text; -webkit-background-clip: text;
+  animation: shimmer-text 1.8s linear infinite;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .processing.processing { animation: none !important; background: none; color: var(--ink-3); }
+}
 
 /* ── 基底 ── */
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -87,6 +96,15 @@ button:focus-visible, [role="menuitem"]:focus-visible, .ui-choice:focus-visible,
 
 /* ═══════════ 输入区（对标 Prompt Bar：field 底 + 细边 + focus-within 收紧） ═══════════ */
 .composer { flex: none; padding: 8px 12px 12px; min-width: 0; width: 100%; max-width: 792px; margin: 0 auto; }
+.composer-context.has-changes { margin: 0 10px -18px; padding: 6px 6px 18px; border: 1px solid var(--line); border-radius: 20px 20px 0 0; }
+.changes-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; padding: 0 6px 8px; min-width: 0; color: var(--ink-3); font-size: 12px; }
+.changes-stats { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; font-variant-numeric: tabular-nums; }
+.changes-added { color: var(--green); }
+.changes-deleted { color: var(--red); }
+.changes-review { flex: none; min-height: 28px; padding: 4px 0; border: none; border-radius: 4px; background: transparent; color: var(--ink-3); font: inherit; cursor: pointer; }
+.changes-review:disabled { opacity: .5; cursor: default; }
+.changes-review:hover:not(:disabled) { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.composer-context.has-changes + .composer-surface { position: relative; }
 .composer-inner { display: flex; flex-direction: column; gap: 10px; padding: 14px 14px 2px; }
 .composer-inner:focus-within { border: none; box-shadow: none; }
 .composer-input { display: block; width: 100%; min-height: 50px; max-height: 180px; padding: 0; resize: none; overflow-y: auto; background: transparent; border: none; outline: none; font-family: inherit; font-size: var(--font-size); line-height: 1.6; color: var(--ink); }
@@ -100,8 +118,8 @@ button:focus-visible, [role="menuitem"]:focus-visible, .ui-choice:focus-visible,
 .send-btn:disabled { opacity: .28; cursor: default; }
 .ctx-ring-btn { width: 24px; height: 24px; padding: 0; }
 /* 套餐用量双圆环（5 小时/每周）：点击弹用量明细弹窗（悬停 title 兜底） */
-.quota-rings { border: none; padding: 0; background: transparent; color: inherit; border-radius: 6px; display: flex; align-items: center; gap: 2px; margin-right: 2px; cursor: pointer; }
-.quota-ring { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
+.quota-rings { border: none; padding: 0; background: transparent; color: inherit; border-radius: 6px; display: flex; align-items: center; gap: 4px; height: 24px; flex: none; cursor: pointer; }
+.quota-ring { width: 24px; height: 24px; flex: none; display: flex; align-items: center; justify-content: center; }
 /* 套餐用量弹层行（复用 ctx-row 行为，环替代彩点） */
 .quota-row-ring { flex: none; display: flex; align-items: center; }
 .quota-row-text { min-width: 0; }
@@ -202,7 +220,7 @@ button:focus-visible, [role="menuitem"]:focus-visible, .ui-choice:focus-visible,
   display: inline-flex; align-items: center; height: 16px; padding: 0 7px; border-radius: 999px;
   font-size: 10px; font-weight: 500; color: var(--ink-2); background: var(--inset);
 }
-.session-item-running { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: records-pulse 1.4s var(--ease-in-out) infinite; }
+.session-item-running { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 
 /* MCP / 账户菜单 */
 /* MCP 状态灯：连接=绿灯 / 失败=红灯（淡色外环，Beautiful UI 状态点风格） */
@@ -273,7 +291,7 @@ button:focus-visible, [role="menuitem"]:focus-visible, .ui-choice:focus-visible,
 .pair-head .icon-svg { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .pair-state { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
 .pair-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--ink-3); flex: none; }
-.pair-state.waiting .pair-dot { background: var(--accent, #f59e0b); animation: pulse 1.6s var(--ease-out) infinite; }
+.pair-state.waiting .pair-dot { background: var(--accent, #f59e0b); }
 .pair-state.active .pair-dot { background: #22c55e; }
 .pair-state.error .pair-dot { background: var(--red); }
 .pair-message { color: var(--ink-3); font-size: 11px; width: 100%; }
@@ -313,9 +331,6 @@ button:disabled { cursor: default; }
 .chat-title:hover { background: var(--hover); }
 .composer-surface { background: var(--field); border: 1px solid var(--line); border-radius: var(--radius-composer); overflow: hidden; }
 .composer-surface:focus-within { border-color: var(--line-strong); }
-.composer-status { display: flex; align-items: center; justify-content: space-between; min-height: 28px; padding: 0 10px 6px; gap: 8px; }
-.local-mode { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12px; }
-.local-mode .icon-svg { width: 16px; height: 16px; }
 .composer-bar-left { flex: none; }
 .composer-bar-right { justify-content: flex-end; flex: 1; }
 .model-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -336,17 +351,21 @@ button:disabled { cursor: default; }
 .menu-search-wrap:focus-within { border-bottom-color: var(--focus); }
 .sessions-menu { width: 340px; }
 .session-results { max-height: 40vh; overflow: auto; }
-.mode-item .icon-svg, .mode-icon { width: 18px; height: 18px; }
-.mode-item { align-items: flex-start; }
-.mode-name { font-weight: 500; }
-.mode-desc { font-size: 11px; white-space: normal; }
+/* 权限图标与勾选各占固定列，均对齐整行中心；两行文字独立伸缩。 */
+.mode-menu { width: 300px; }
+.mode-item { display: grid; grid-template-columns: 20px minmax(0, 1fr) 16px; column-gap: 8px; align-items: center; min-height: 48px; padding: 8px; }
+.mode-item > .mode-icon { display: inline-flex; width: 20px; height: 20px; color: inherit; }
+.mode-item > .icon-check { grid-column: 3; width: 16px; height: 16px; margin: 0; color: inherit; }
+.mode-item .mode-name { font-size: var(--font-size); font-weight: 400; line-height: 1.4; }
+.mode-item .mode-desc { font-size: calc(var(--font-size) - 1px); line-height: 1.4; white-space: normal; }
+.mode-item.full-access, .mode-item.full-access .mode-name, .mode-item.full-access .mode-desc { color: var(--orange); }
 .provider-group { font-size: 10px; padding-top: 9px; }
 .jump-latest { position: absolute; bottom: 175px; right: 24px; z-index: 3; width: 30px; height: 30px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: var(--shadow-overlay); }
 @media (max-width: 320px) {
   .chat-titlebar { padding-inline: 4px; }
   .composer { padding-inline: 8px; }
   .composer-bar { gap: 2px; padding: 6px; }
-  .composer-bar-left, .composer-bar-right { gap: 0; }
+  .composer-bar-left, .composer-bar-right, .quota-rings { gap: 0; }
   .messages { padding-inline: 12px; }
   .gate { padding: 16px; }
 }

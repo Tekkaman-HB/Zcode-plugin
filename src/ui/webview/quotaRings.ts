@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 消费 ../bridge 的 QuotaUsagePayload、./render 的 h、./i18n 的 Translate
  * [OUTPUT]: createQuotaRings（可键盘激活的套餐用量按钮）、quotaRingSvg/fmtIn（弹层复用的 SVG 与倒计时）
- * [POS]: webview 套餐额度层，shell.ts 挂载于 composer-status；quota-usage 驱动 update，menus.ts 展示详情
+ * [POS]: webview 套餐额度层，shell.ts 挂载于 composer-bar-right，与上下文圆环同行；quota-usage 驱动 update，menus.ts 展示详情
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
  * 视觉与 ctx-ring-btn 完全同款（16px 环 + 2.4 线宽 + charts 色梯度）；

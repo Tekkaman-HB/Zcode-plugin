@@ -2,7 +2,7 @@
   "name": "zcode-vscode",
   "displayName": "Zcode plan tool",
   "description": "ZCode for VSCode — Z.ai 智能编程助手，复用桌面端账户认证，对接 ZCode CLI 协议",
-  "version": "0.5.29",
+  "version": "0.5.41",
   "publisher": "huangbing",
   "license": "MIT",
   "private": true,
@@ -14,7 +14,9 @@
     "Chat",
     "Programming Languages"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onFileSystem:zcode-snapshot"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -119,6 +121,8 @@
     "smoke:server": "node esbuild.js && node out/scripts/smoke-server.js",
     "ui-preview": "node scripts/ui-preview.mjs",
     "theme-check": "node scripts/theme-check.mjs",
+    "changes-check": "node scripts/git-changes-check.mjs",
+    "diff-smoke": "node scripts/native-diff-check.mjs",
     "package": "npm run build && vsce package --allow-missing-repository",
     "docs:check": "bash scripts/docs/check.sh",
     "ai:check": "bash scripts/docs/ai-check.sh",

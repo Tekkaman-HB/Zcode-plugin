@@ -1,11 +1,11 @@
 /**
  * [INPUT]: 依赖 ./render、./icons、./i18n、./events 的展示类型与 ./format 的用量格式化与 reasoningChoices 三档映射
- * [OUTPUT]: createChatShell、renderWelcome、renderHeaderControls、renderContextRing；权限入口统一盾牌叹号，模型标签显示名称和低/中/高
+ * [OUTPUT]: createChatShell（含底部差异容器、套餐与上下文圆环同排，无本地模式状态行）、renderWelcome（加载文字扫光）、renderHeaderControls、renderContextRing、renderStatus/renderResponseWait
  * [POS]: webview 的布局层；chat.ts 持有状态，composer.ts 绑定输入行为
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { h } from './render';
-import { iconEl, zLogoEl } from './icons';
+import { h, renderPendingResponse, processingLabel } from './render';
+import { iconEl, zLogoEl, MODE_ICONS } from './icons';
 import type { Translate, WvStringKey } from './i18n';
 import type { ChatSessionState } from './events';
 import { formatTokens, fmtContext, reasoningChoices } from './format';
@@ -37,7 +37,7 @@ export function renderHeaderControls(host: {
     host.modelBtn.title = `${host.t('model')}: ${label}`;
     host.modelBtn.setAttribute('aria-label', host.modelBtn.title);
     const mode = String(host.session?.settings.mode.current ?? host.session?.projection.mode ?? host.defaultMode);
-    host.modeBtn.replaceChildren(iconEl('shield'));
+    host.modeBtn.replaceChildren(iconEl(MODE_ICONS[mode] ?? MODE_ICONS.build));
     host.modeBtn.classList.toggle('full-access', mode === 'yolo');
     const names = host.locale === 'zh-CN' ? MODE_CHIP_LABEL : { plan: 'Plan', build: 'Confirm changes', edit: 'Auto edit', yolo: 'Full access' } as Record<string, string>;
     host.modeBtn.title = `${host.t('permissions')}: ${names[mode] ?? mode}`;
@@ -46,6 +46,28 @@ export function renderHeaderControls(host: {
     host.titleEl.setAttribute('aria-label', `${host.titleEl.textContent}, ${host.t('chatActions')}`);
     host.updateSendAffordance();
   }
+
+interface ResponseWaitHost {
+  messagesEl: HTMLElement; t: Translate; session: ChatSessionState | null; serverState: string;
+  pendingPermissions: { size: number }; pendingUserInputs: { size: number };
+  scrollBottom(): void;
+}
+
+/** 消息刷新只校准首响占位，不重复构建发送按钮和上下文圆环。 */
+export function renderResponseWait(host: ResponseWaitHost): void {
+  const waiting = host.session?.projection.status === 'running' && host.serverState === 'ready'
+    && !host.pendingPermissions.size && !host.pendingUserInputs.size;
+  if (renderPendingResponse(host.messagesEl, host.t, waiting)) host.scrollBottom();
+}
+
+/** 状态变化时更新控件，并校准首响前的等待反馈。 */
+export function renderStatus(host: ResponseWaitHost & {
+  updateSendAffordance(): void; renderContextRing(): void;
+}): void {
+  host.updateSendAffordance();
+  host.renderContextRing();
+  renderResponseWait(host);
+}
 
 interface ShellActions {
   sessions(): void;
@@ -58,6 +80,7 @@ interface ShellActions {
   context(): void;
   send(): void;
   latest(): void;
+  review(): void;
 }
 
 /** 静态骨架只建一次；所有动作仍由 ChatApp 分发到现有协议桥。 */
@@ -81,7 +104,7 @@ export function createChatShell(t: Translate, a: ShellActions, quota: HTMLElemen
     'aria-label': t('inputPlaceholder'), rows: '2' });
   const modelBtn = h('button', { type: 'button', class: 'composer-chip model-chip',
     title: t('model'), 'aria-label': t('model'), 'aria-haspopup': 'menu', onclick: a.model }, 'GLM', iconEl('chevronDown'));
-  const modeBtn = button('permissions', 'shield', a.mode, 'bar-icon-btn mode-btn');
+  const modeBtn = button('permissions', MODE_ICONS.build, a.mode, 'bar-icon-btn mode-btn');
   modeBtn.setAttribute('aria-haspopup', 'menu');
   const attachBtn = button('attach', 'plus', a.attach, 'bar-icon-btn');
   attachBtn.setAttribute('aria-haspopup', 'menu');
@@ -89,13 +112,15 @@ export function createChatShell(t: Translate, a: ShellActions, quota: HTMLElemen
   const sendBtn = button('send', 'arrowUp', a.send, 'send-btn');
   const jumpBtn = button('latest', 'arrowDown', a.latest, 'jump-latest hidden');
   const composer = h('section', { class: 'composer', 'aria-label': t('composer') }, queuedEl,
-    h('div', { class: 'composer-status' },
-      h('span', { class: 'local-mode', title: t('localMode') }, iconEl('monitor'), h('span', { 'data-text': 'localMode' }, t('localMode'))), quota),
+    h('div', { class: 'composer-context' },
+      h('div', { class: 'changes-summary hidden', role: 'group' },
+        h('div', { class: 'changes-stats' }),
+        h('button', { type: 'button', class: 'changes-review', 'data-text': 'viewChanges', 'data-label': 'viewChanges', onclick: a.review }, t('viewChanges')))),
     h('div', { class: 'composer-surface' },
       h('div', { class: 'composer-inner' }, attachRow, composerInput),
       h('div', { class: 'composer-bar' },
         h('div', { class: 'composer-bar-left' }, attachBtn, modeBtn),
-        h('div', { class: 'composer-bar-right' }, ctxRingBtn, modelBtn, sendBtn))));
+        h('div', { class: 'composer-bar-right' }, quota, ctxRingBtn, modelBtn, sendBtn))));
   const fragment = document.createDocumentFragment();
   fragment.append(titlebar, banner, messagesEl, overlayEl, jumpBtn, todoPanelEl, popup, composer);
   return { fragment, banner, messagesEl, overlayEl, todoPanelEl, attachRow, queuedEl, composerInput,
@@ -139,7 +164,7 @@ export function renderWelcome(container: HTMLElement, t: Translate, options: Wel
   const login = options.loginRequired;
   const gate = h('div', { class: 'gate' }, zLogoEl(),
     h('h1', { class: 'gate-title' }, t(login ? 'loginRequired' : 'emptyTitle')),
-    h('p', { class: 'gate-hint' }, t(login ? 'loginHint' : options.starting ? 'starting' : 'emptyHint')));
+    h('p', { class: 'gate-hint' }, !login && options.starting ? processingLabel(t('starting')) : t(login ? 'loginHint' : 'emptyHint')));
   if (login) gate.append(h('button', { class: 'gate-btn', onclick: options.login }, t('login')));
   else gate.append(h('div', { class: 'gate-suggestions' },
     ...(['suggestExplore', 'suggestFix', 'suggestTest'] as const).map((key, i) =>

@@ -1,10 +1,10 @@
 /**
- * [INPUT]: 消费 ./render 的 h/isTodoWrite、./icons 的 iconEl、./events 的消息类型与 ./i18n
+ * [INPUT]: 消费 ./render 的 h/isTodoWrite/processingLabel、./icons 的 iconEl、./events 的消息类型与 ./i18n
  * [OUTPUT]: extractLatestTodos、renderTodoPanel、关闭记忆读写及相关类型；任务把手使用原生按钮，支持键盘展开/折叠与完成后关闭
  * [POS]: webview 的进程面板层——消息流与 composer 之间的常驻任务进展（对标桌面端"进程"状态面板）；不持有渲染状态，chat.ts 在消息集变化时调用；关闭记忆经 localStorage 持久化（跨会话切换/webview 重载保留）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { h, isTodoWrite } from './render';
+import { h, isTodoWrite, processingLabel } from './render';
 import { iconEl } from './icons';
 import type { MutableSessionMessage } from './events';
 import type { Translate } from './i18n';
@@ -104,7 +104,7 @@ export function renderTodoPanel(
     h('span', { class: `todo-dot ${dot}` }, allDone ? iconEl('check') : null),
     h('span', { class: 'todo-panel-title' }, t('progressPanel')),
     h('span', { class: 'todo-panel-count' }, `${done}/${todos.length}`),
-    h('span', { class: 'todo-panel-current' }, allDone ? t('todoAllDone') : current?.content ?? '')
+    current ? processingLabel(current.content, 'todo-panel-current') : h('span', { class: 'todo-panel-current' }, allDone ? t('todoAllDone') : '')
   );
   const head = h('div', { class: 'todo-panel-head' }, toggle);
   // 关闭按钮：仅全部完成时出现（未完成的任务没有可关性）；点击不冒泡（不触发展开/折叠）
@@ -134,7 +134,7 @@ export function renderTodoPanel(
       const st = td.status === 'completed' ? 'completed' : td.status === 'in_progress' ? 'running' : 'pending';
       list.append(h('div', { class: `todo-item todo-${st}` },
         h('span', { class: `todo-dot todo-dot-${st}` }, st === 'completed' ? iconEl('check') : null),
-        h('span', { class: 'todo-text' }, td.content)));
+        st === 'running' ? processingLabel(td.content, 'todo-text') : h('span', { class: 'todo-text' }, td.content)));
     }
     el.insertBefore(list, head);
   }

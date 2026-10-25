@@ -1,6 +1,6 @@
 /**
- * [INPUT]: node:fs/path/child_process、全局 playwright、./preview-server 与真实 out/webview 产物
- * [OUTPUT]: 真实产物 UI 回归；覆盖四主题/窄栏/键盘/发送/权限、命令状态与输出/折叠记忆、16px 权限盾牌与模型三档
+ * [INPUT]: node:fs/path/child_process、全局 playwright、./preview-server、loading/tool-activity-check 与真实 out/webview 产物
+ * [OUTPUT]: 真实产物 UI 回归；含套餐/上下文同排圆环几何与键盘/缺失数据、处理状态扫光/刷新续播/无秒表与旋转/无障碍、底部会话 diff 摘要/迟到消息隔离/无记录隐藏与部分记录/点击/四主题/窄栏/空态、首响等待、权限图标、段距/工具分组/跨消息密度与 Codex 图标/流式 DOM 复用与既有交互
  * [POS]: scripts/ 的自动界面验收层，与 ui-preview.mjs 共用 ui-live.html 场景，无 CLI 或网络请求
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -9,6 +9,8 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { serveOnFreePort } from './preview-server.mjs';
+import { loadingChecks } from './loading-check.mjs';
+import { toolActivityChecks } from './tool-activity-check.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 let failures = 0;
@@ -62,7 +64,259 @@ async function browserChecks() {
     const check = async (name, fn) => {
       try { ok(name, await fn()); } catch (e) { ok(name, false, e.message.split('\n')[0]); }
     };
+    await loadingChecks(page, load, check);
+    await toolActivityChecks(page, load, check);
     const lastSent = kind => page.evaluate(kind => window.__sent.filter(m => m.kind === kind).at(-1), kind);
+    await check('底部 diff 摘要固定在输入框上方，统计/点击与空态更新正确', async () => {
+      await load();
+      if (await page.locator('.changes-summary').isVisible()) return false;
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'ready', files: 2, added: 15, deleted: 3, binary: 0 } }));
+      await page.waitForSelector('.changes-summary:visible');
+      if (await page.locator('.changes-count').innerText() !== '2 个文件已更改'
+        || await page.locator('.changes-added').innerText() !== '+15'
+        || await page.locator('.changes-deleted').innerText() !== '−3') return false;
+      const summary = await page.locator('.changes-summary').boundingBox();
+      const input = await page.locator('.composer-surface').boundingBox();
+      if (summary.y + summary.height > input.y || summary.y < 500) return false;
+      await page.locator('.changes-review').focus();
+      await page.keyboard.press('Enter');
+      if (!(await lastSent('review-changes'))) return false;
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'ready', files: 0, added: 0, deleted: 0, binary: 0 } }));
+      await page.waitForSelector('.changes-summary.hidden', { state: 'attached' });
+      return !await page.locator('.composer-context.has-changes').count();
+    });
+    await check('diff 摘要四主题/280px 窄栏无溢出或按钮遮挡，二进制说明准确', async () => {
+      for (const theme of ['dark', 'light', 'hc', 'hclight']) {
+        await load('&theme=' + theme);
+        await page.setViewportSize({ width: 280, height: 900 });
+        await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'ready', files: 123, added: 123456, deleted: 98765, binary: 1 } }));
+        await page.waitForSelector('.changes-summary:visible');
+        const valid = await page.evaluate(() => {
+          const summary = document.querySelector('.changes-summary');
+          const button = document.querySelector('.changes-review');
+          const r = button.getBoundingClientRect();
+          return document.documentElement.scrollWidth <= innerWidth && summary.scrollWidth <= summary.clientWidth
+            && r.right <= innerWidth && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === button
+            && summary.title.includes('二进制')
+            && getComputedStyle(document.querySelector('.changes-added')).color !== getComputedStyle(document.querySelector('.changes-deleted')).color;
+        });
+        if (!valid) return false;
+      }
+      await page.setViewportSize({ width: 460, height: 900 });
+      await load('&locale=en-US');
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'ready', files: 1, added: 15, deleted: 0, binary: 0 } }));
+      await page.waitForSelector('.changes-summary:visible');
+      if (await page.locator('.changes-review').innerText() !== 'Review changes') return false;
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'missing', files: 0, added: 0, deleted: 0, binary: 0 } }));
+      await page.waitForSelector('.changes-summary.hidden', { state: 'attached' });
+      return !await page.locator('.composer-context.has-changes').count();
+    });
+    await check('会话 diff 忽略其他会话的迟到消息，切换会话时先清空旧摘要', async () => {
+      await load();
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'ready', files: 1, added: 4, deleted: 1, binary: 0 } }));
+      await page.waitForSelector('.changes-summary:visible');
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 'other', status: 'ready', files: 99, added: 99, deleted: 99, binary: 0 } }));
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+      if (await page.locator('.changes-count').innerText() !== '1 个文件已更改') return false;
+      await page.evaluate(() => window.__fixture.snapshot('empty', 's2'));
+      await page.waitForSelector('.changes-summary.hidden', { state: 'attached' });
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'ready', files: 1, added: 4, deleted: 1, binary: 0 } }));
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+      return !await page.locator('.changes-summary').isVisible();
+    });
+    await check('无可恢复 diff 时隐藏摘要与入口，部分记录仍可审查，捕获基线保留准备反馈', async () => {
+      for (const theme of ['dark', 'light', 'hc', 'hclight']) {
+        await load('&theme=' + theme);
+        for (const status of ['ready', 'missing', 'error', 'partial']) {
+          await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'ready', files: 1, added: 2, deleted: 1, binary: 0 } }));
+          await page.waitForSelector('.changes-summary:visible');
+          await page.evaluate(status => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status, files: 0, added: 0, deleted: 0, binary: 0 } }), status);
+          await page.waitForSelector('.changes-summary.hidden', { state: 'attached' });
+          if (await page.locator('.changes-summary').isVisible() || await page.locator('.composer-context.has-changes').count()) return false;
+        }
+      }
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'preparing', files: 0, added: 0, deleted: 0, binary: 0 } }));
+      await page.waitForSelector('.changes-summary:visible');
+      if (await page.locator('.changes-note').innerText() !== '正在准备…' || !await page.locator('.changes-review').isDisabled()) return false;
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes', data: { sessionId: 's1', status: 'partial', files: 1, added: 2, deleted: 1, binary: 0 } }));
+      await page.waitForFunction(() => document.querySelector('.changes-note')?.textContent === '部分记录');
+      return !await page.locator('.changes-review').isDisabled() && (await page.locator('.changes-summary').getAttribute('title')).includes('当前会话');
+    });
+    await check('首次发送已受理但首个模型事件未到时，下一帧即显示等待指示', async () => {
+      await load('&scene=empty');
+      await page.locator('.composer-input').fill('检查首次发送的等待反馈');
+      await page.locator('.send-btn').click();
+      if ((await lastSent('send'))?.content !== '检查首次发送的等待反馈') return false;
+      await page.evaluate(() => {
+        const f = window.__fixture;
+        f.post({ kind: 'optimistic-user', data: { id: 'local-first', text: '检查首次发送的等待反馈' } });
+        f.status('running');
+      });
+      await page.waitForSelector('.msg-user');
+      await page.waitForSelector('.send-btn.stop');
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      return await page.locator('.msg-thinking:visible').count() === 1;
+    });
+    await check('等待指示跨消息校准保持同一节点，首个推理或正文接管后不残留', async () => {
+      await load('&scene=empty');
+      await page.evaluate(() => {
+        const f = window.__fixture;
+        f.post({ kind: 'optimistic-user', data: { id: 'local-handoff', text: '检查响应接管' } });
+        f.status('running');
+      });
+      await page.waitForSelector('.msg-thinking');
+      await page.evaluate(() => {
+        window.__waitingNode = document.querySelector('.msg-thinking');
+        const f = window.__fixture;
+        f.post({ kind: 'messages', data: { messages: [f.message('server-user', 'user', [f.text('检查响应接管')])] } });
+      });
+      await page.waitForSelector('[data-message-id="server-user"]');
+      if (!await page.evaluate(() => window.__waitingNode === document.querySelector('.msg-thinking'))) return false;
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-event', data: {
+        type: 'model.streaming', sessionId: 's1', payload: {
+          kind: 'start', assistantMessageId: 'first-assistant'
+        }
+      } }));
+      await page.waitForSelector('[data-message-id="first-assistant"]');
+      if (await page.locator('.msg-thinking:visible').count() !== 1) return false;
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-event', data: {
+        type: 'model.streaming', sessionId: 's1', payload: {
+          kind: 'reasoning_delta', assistantMessageId: 'first-assistant', partId: 'first-reasoning', delta: '检查当前工作区状态。'
+        }
+      } }));
+      await page.waitForSelector('.reasoning-live');
+      if (await page.locator('.msg-thinking').count() !== 0
+        || await page.locator('.reasoning-live').count() !== 1) return false;
+      await load('&scene=empty');
+      await page.evaluate(() => {
+        const f = window.__fixture;
+        f.post({ kind: 'optimistic-user', data: { id: 'local-direct', text: '直接返回正文' } });
+        f.status('running');
+      });
+      await page.waitForSelector('.msg-thinking');
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-event', data: {
+        type: 'model.streaming', sessionId: 's1', payload: {
+          kind: 'text_delta', assistantMessageId: 'direct-assistant', partId: 'direct-text', delta: '已收到问题。'
+        }
+      } }));
+      await page.waitForSelector('[data-part-id="direct-text"]');
+      return await page.locator('.msg-thinking').count() === 0;
+    });
+    await check('首响等待在停止/失败/交互/会话切换时退出，恢复运行会话不丢失也不伪造助手消息', async () => {
+      for (const end of ['idle', 'turn-failed', 'server-failed', 'permission', 'question', 'switch', 'closed']) {
+        await load('&scene=empty');
+        await page.evaluate(() => {
+          const f = window.__fixture, data = f.makeSnapshot('empty');
+          data.messages = [f.message('restored-user', 'user', [f.text('等待首个模型事件')])];
+          data.projection.status = 'running';
+          f.post({ kind: 'session-snapshot', data });
+        });
+        await page.waitForSelector('.msg-thinking');
+        if (await page.locator('.msg-assistant').count() !== 0) return false;
+        await page.evaluate(end => {
+          const f = window.__fixture;
+          if (end === 'idle') f.status('idle');
+          if (end === 'turn-failed') f.post({ kind: 'session-event', data: { type: 'turn.failed', sessionId: 's1', payload: { errorMessage: '模拟首响前失败' } } });
+          if (end === 'server-failed') f.post({ kind: 'server-state', state: 'failed' });
+          if (end === 'permission') f.permission();
+          if (end === 'question') f.question();
+          if (end === 'switch') f.snapshot('empty', 's2');
+          if (end === 'closed') f.post({ kind: 'session-closed' });
+        }, end);
+        await page.waitForFunction(() => !document.querySelector('.msg-thinking'));
+      }
+      return true;
+    });
+    await check('思考箭头与文字行居中，字体放大后不溢出图标容器', async () => {
+      await load();
+      for (const size of [13, 16, 20]) {
+        const aligned = await page.locator('.reasoning summary').first().evaluate((el, size) => {
+          el.style.fontSize = size + 'px';
+          const row = el.getBoundingClientRect();
+          const arrow = el.querySelector('.reasoning-chevron svg').getBoundingClientRect();
+          const box = el.querySelector('.reasoning-chevron').getBoundingClientRect();
+          return Math.abs(row.y + row.height / 2 - arrow.y - arrow.height / 2) < .5
+            && arrow.width <= box.width && arrow.height <= box.height;
+        }, size);
+        if (!aligned) return false;
+      }
+      return true;
+    });
+    await check('正文段落保留留白，列表不重复加段距，行内代码随字号缩放', async () => {
+      await load();
+      await page.evaluate(() => {
+        const f = window.__fixture;
+        f.post({ kind: 'messages', data: { messages: [f.message('paragraphs', 'assistant', [f.text(
+          '第一段内容。\n\n第二段含有 `inline`。\n\n- 第一项\n\n- 第二项\n\n最后一段。'
+        )])] } });
+      });
+      await page.waitForSelector('[data-message-id="paragraphs"] .md');
+      return page.locator('[data-message-id="paragraphs"] .md').evaluate(el => {
+        el.style.fontSize = '18px';
+        const paragraphs = el.querySelectorAll(':scope > p');
+        const gap = paragraphs[1].getBoundingClientRect().top - paragraphs[0].getBoundingClientRect().bottom;
+        const codeSize = parseFloat(getComputedStyle(el.querySelector('code')).fontSize);
+        const listSpacing = [...el.querySelectorAll('li > p')].every(p => {
+          const style = getComputedStyle(p);
+          return style.marginTop === '0px' && style.marginBottom === '0px';
+        });
+        return gap >= 12 && codeSize >= 16 && codeSize <= 18 && listSpacing;
+      });
+    });
+    await check('连续工具调用收起成活动摘要，键盘可展开且刷新保持选择', async () => {
+      await load();
+      const group = page.locator('.tool-activity');
+      if (await group.count() !== 1 || await group.evaluate(el => el.open)) return false;
+      await group.locator(':scope > summary').focus();
+      await page.keyboard.press('Enter');
+      if (!await group.evaluate(el => el.open)) return false;
+      await page.evaluate(() => {
+        const f = window.__fixture, data = f.makeSnapshot();
+        data.messages[1].parts[1].state.output = '分组刷新后的输出';
+        f.post({ kind: 'messages', data: { messages: data.messages } });
+      });
+      await page.waitForFunction(() => document.querySelector('.tool-card-body')?.textContent.includes('分组刷新后的输出'));
+      return group.evaluate(el => el.open);
+    });
+    await check('流式正文即时展示 Markdown，已完成段落保持 DOM，结束后保留代码复制', async () => {
+      await load('&scene=empty');
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-event', data: {
+        type: 'part.upserted', sessionId: 's1', payload: { part: {
+          type: 'tool', partId: 'stream-tool', messageId: 'stream-ui', sessionId: 's1', callId: 'stream-call',
+          tool: 'Bash', state: { status: 'completed', input: { command: 'pwd' }, output: '/workspace' }
+        } }
+      } }));
+      const delta = async text => {
+        await page.evaluate(text => {
+          const f = window.__fixture;
+          f.status('running');
+          f.post({ kind: 'session-event', data: { type: 'model.streaming', sessionId: 's1', payload: {
+            kind: 'text_delta', assistantMessageId: 'stream-ui', partId: 'stream-part', delta: text
+          } } });
+        }, text);
+      };
+      await delta('第一段 **加粗**。\n\n第二段');
+      await page.waitForSelector('[data-part-id="stream-part"] strong');
+      await delta('继续输出');
+      await page.waitForFunction(() => document.querySelector('[data-part-id="stream-part"]')?.textContent.includes('继续输出'));
+      await page.evaluate(() => { window.__stableParagraph = document.querySelector('[data-part-id="stream-part"] p'); });
+      await delta('。\n\n```typescript\nconst ready = true;');
+      await page.waitForSelector('[data-part-id="stream-part"] pre code');
+      const stable = await page.evaluate(() => window.__stableParagraph === document.querySelector('[data-part-id="stream-part"] p'));
+      await page.locator('[data-part-id="stream-part"] .copy-btn').click();
+      const copied = await page.evaluate(() => window.__copied);
+      await delta('\n```\n\n完成。');
+      await page.waitForFunction(() => document.querySelector('[data-part-id="stream-part"]')?.textContent.includes('完成。'));
+      await page.evaluate(() => {
+        const f = window.__fixture;
+        f.status('idle');
+        f.post({ kind: 'messages', data: { messages: [f.message('stream-ui', 'assistant', [f.text(
+          '第一段 **加粗**。\n\n第二段继续输出。\n\n```typescript\nconst ready = true;\n```\n\n完成。'
+        )])] } });
+      });
+      return stable && copied === 'const ready = true;\n'
+        && await page.locator('[data-message-id="stream-ui"] strong').innerText() === '加粗';
+    });
     await check('四主题互异，dark+HC 并存时 HC 胜出', async () => {
       await load();
       return page.evaluate(() => {
@@ -80,9 +334,11 @@ async function browserChecks() {
         return style.backgroundColor === 'rgb(18, 52, 86)' && style.fontFamily === 'monospace';
       });
     });
-    await check('四主题 × 260/320/460/900px 无横向溢出，菜单位于视口内且模型上下文列对齐', async () => {
+    await check('四主题 × 260/320/460/900px 套餐与上下文圆环同行居中、间距一致，无溢出且菜单对齐', async () => {
       for (const theme of ['light', 'dark', 'hc', 'hclight']) {
         await load('&theme=' + theme);
+        await page.evaluate(() => window.__fixture.post({ kind: 'quota-usage', data: { fiveHour: { percent: 20, resetAt: null }, weekly: { percent: 30, resetAt: null }, level: 'Pro' } }));
+        await page.waitForSelector('.quota-rings:not(.hidden)');
         for (const width of [260, 320, 460, 900]) {
           await page.setViewportSize({ width, height: 900 });
           await page.locator('.model-chip').click();
@@ -91,7 +347,13 @@ async function browserChecks() {
             const composer = document.querySelector('.composer-surface').getBoundingClientRect();
             const send = document.querySelector('.send-btn').getBoundingClientRect();
             const metaEdges = [...document.querySelectorAll('.model-item .menu-item-meta')].map(el => el.getBoundingClientRect().right);
-            return metaEdges.every(right => Math.abs(right - metaEdges[0]) < 1)
+            const bar = document.querySelector('.composer-bar-right'), quota = document.querySelector('.quota-rings'), context = document.querySelector('.ctx-ring-btn');
+            const rings = [...quota.querySelectorAll('.quota-ring:not(.hidden) svg'), context.querySelector('svg')].map(el => el.getBoundingClientRect());
+            const centers = rings.map(r => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 }));
+            return quota.parentElement === bar && context.parentElement === bar && !document.querySelector('.local-mode, .composer-status')
+              && rings.every(r => r.width === 16 && r.height === 16) && centers.every(c => Math.abs(c.y - centers[0].y) < .5)
+              && Math.abs((centers[1].x - centers[0].x) - (centers[2].x - centers[1].x)) < .5
+              && metaEdges.every(right => Math.abs(right - metaEdges[0]) < 1)
               && document.documentElement.scrollWidth <= innerWidth && popup.left >= 0 && popup.right <= innerWidth + 1 && send.right <= composer.right && composer.right <= innerWidth;
           });
           await page.keyboard.press('Escape');
@@ -267,14 +529,15 @@ async function browserChecks() {
         window.__fixture.post({ kind: 'messages', data: { messages: data.messages } });
       });
       await page.waitForFunction(() => document.querySelector('.tool-card-name').textContent === '已运行');
+      await page.locator('.tool-activity > summary').click();
       const card = page.locator('.tool-card').first();
       return (await card.locator('.tool-card-summary').innerText()).startsWith('rg -n')
         && await card.locator('.icon-terminal').count() === 1;
     });
-    await check('权限入口四种模式均用 16px 盾牌叹号，完全访问保留警示色', async () => {
+    await check('权限入口按模式显示 16px 语义图标，完全访问保留警示色', async () => {
       await load();
       const colors = [];
-      for (const mode of ['plan', 'build', 'edit', 'yolo']) {
+      for (const [mode, iconName] of [['plan', 'plan'], ['build', 'hand'], ['edit', 'terminalShield'], ['yolo', 'shield']]) {
         await page.evaluate(mode => {
           const data = window.__fixture.makeSnapshot();
           data.settings.mode.current = mode;
@@ -282,19 +545,64 @@ async function browserChecks() {
         }, mode);
         await page.waitForFunction(mode => document.querySelector('.mode-btn').classList.contains('full-access') === (mode === 'yolo'), mode);
         await page.waitForFunction(() => document.querySelector('.mode-btn').getAnimations().every(animation => animation.playState === 'finished'));
-        const valid = await page.locator('.mode-btn').evaluate(el => {
-          const icon = el.querySelector('.icon-shield');
+        const valid = await page.locator('.mode-btn').evaluate((el, iconName) => {
+          const icon = el.querySelector('.icon-' + iconName);
           return icon && getComputedStyle(icon).width === '16px' && !el.querySelector('.icon-bolt');
-        });
+        }, iconName);
         if (!valid) return false;
         colors.push(await page.locator('.mode-btn').evaluate(el => getComputedStyle(el).color));
       }
       return colors[0] === colors[1] && colors[1] === colors[2] && colors[2] !== colors[3];
     });
+    await check('权限菜单图标语义匹配、20px 整行居中，警示文字与勾选同色，四主题窄栏不挤压', async () => {
+      for (const theme of ['light', 'dark', 'hc', 'hclight']) {
+        await load('&theme=' + theme);
+        await page.evaluate(() => {
+          const f = window.__fixture, data = f.makeSnapshot();
+          data.settings.mode.current = 'yolo';
+          f.post({ kind: 'session-snapshot', data });
+        });
+        for (const width of [260, 320, 460]) {
+          await page.setViewportSize({ width, height: 900 });
+          for (const size of [13, 16]) {
+            await page.evaluate(size => document.documentElement.style.setProperty('--vscode-font-size', size + 'px'), size);
+            await page.locator('.mode-btn').click();
+            const valid = await page.locator('.mode-menu').evaluate(el => {
+              const expected = ['plan', 'hand', 'terminalShield', 'shield'];
+              const rows = [...el.querySelectorAll('.mode-item')];
+              const center = r => r.y + r.height / 2;
+              const goodRows = rows.length === 4 && rows.every((row, i) => {
+                const icon = row.querySelector('.mode-icon'), svg = icon?.querySelector('svg');
+                if (!icon?.classList.contains('icon-' + expected[i]) || !svg) return false;
+                const r = row.getBoundingClientRect(), box = icon.getBoundingClientRect(), drawing = svg.getBoundingClientRect();
+                const text = row.querySelector('.mode-text').getBoundingClientRect();
+                return box.width === 20 && box.height === 20 && drawing.width === 20 && drawing.height === 20
+                  && Math.abs(center(r) - center(box)) < .5 && Math.abs(text.left - box.right - 8) < .5;
+              });
+              const selected = el.querySelector('[aria-checked="true"]');
+              const check = selected?.querySelector('.icon-check');
+              if (!goodRows || !check || el.querySelectorAll('.icon-check').length !== 1) return false;
+              const warning = getComputedStyle(selected).color;
+              const warningParts = ['.mode-icon', '.mode-name', '.mode-desc', '.icon-check'];
+              const menu = el.closest('.popup').getBoundingClientRect();
+              return warningParts.every(selector => getComputedStyle(selected.querySelector(selector)).color === warning)
+                && warning !== getComputedStyle(rows[1].querySelector('.mode-icon')).color
+                && check.getBoundingClientRect().width === 16
+                && Math.abs(center(check.getBoundingClientRect()) - center(selected.getBoundingClientRect())) < .5
+                && menu.left >= 0 && menu.right <= innerWidth + 1 && !el.querySelector('.icon-bolt');
+            });
+            await page.keyboard.press('Escape');
+            if (!valid) return false;
+          }
+        }
+      }
+      await page.setViewportSize({ width: 460, height: 900 });
+      return true;
+    });
     await check('命令等待/运行/完成/失败/拒绝/停止状态与输出一致，空详情不可展开', async () => {
       await load();
       for (const [status, label, icon] of [
-        ['pending', '等待运行', 'spinner'], ['running', '正在运行', 'spinner'],
+        ['pending', '等待运行', 'terminal'], ['running', '正在运行', 'terminal'],
         ['completed', '已运行', 'terminal'], ['error', '运行失败', 'close'],
         ['denied', '已拒绝', 'close'], ['interrupted', '已停止', 'stop']
       ]) {
@@ -320,6 +628,7 @@ async function browserChecks() {
     });
     await check('工具默认折叠，可键盘展开，刷新后保留展开选择', async () => {
       await load();
+      await page.locator('.tool-activity > summary').click();
       const card = page.locator('.tool-card').first();
       if (await card.locator('.tool-card-body').isVisible()) return false;
       await card.locator('.tool-card-header').focus();
@@ -368,11 +677,24 @@ async function browserChecks() {
       await page.keyboard.press('Escape');
       return (await lastSent('pair-phone'))?.kind === 'pair-phone' && await page.locator('.pair-card').count() === 0;
     });
-    await check('上下文来源色条在真实 CSP 下保留宽度与颜色', async () => {
+    await check('真实 CSP 下上下文与套餐入口均可操作，单/双环及数据缺失正确收起', async () => {
       await load('&csp=fixed');
       await page.evaluate(() => window.__fixture.context());
       await page.locator('.ctx-ring-btn').click();
-      return page.locator('.ctx-seg').first().evaluate(el => getComputedStyle(el).backgroundColor !== 'rgba(0, 0, 0, 0)' && el.getBoundingClientRect().width > 0);
+      const good = await page.locator('.ctx-seg').first().evaluate(el => getComputedStyle(el).backgroundColor !== 'rgba(0, 0, 0, 0)' && el.getBoundingClientRect().width > 0);
+      await page.keyboard.press('Escape');
+      for (const weekly of [null, { percent: 30, resetAt: null }]) {
+        await page.evaluate(weekly => window.__fixture.post({ kind: 'quota-usage', data: { fiveHour: { percent: 20, resetAt: null }, weekly, level: 'Pro' } }), weekly);
+        await page.waitForSelector('.quota-rings:not(.hidden)');
+        await page.locator('.quota-rings').focus(); await page.keyboard.press('Enter');
+        await page.waitForSelector('.quota-menu');
+        if (await page.locator('.quota-menu .ctx-row').count() !== (weekly ? 2 : 1)) return false;
+        await page.keyboard.press('Escape');
+        if (!await page.locator('.quota-rings').evaluate(el => document.activeElement === el)) return false;
+      }
+      await page.evaluate(() => window.__fixture.post({ kind: 'quota-usage', data: null }));
+      await page.waitForSelector('.quota-rings.hidden', { state: 'attached' });
+      return good && !await page.locator('.composer-status').count();
     });
     await check('问答选择使用原始 action/content，应答后卡片退出队列', async () => {
       await load();
@@ -452,7 +774,7 @@ async function browserChecks() {
     await check('英文界面更新导航与输入标签', async () => {
       await load('&locale=en-US&scene=empty');
       return await page.getByRole('button', { name: 'New chat', exact: true }).count() === 1
-        && await page.locator('.local-mode').innerText() === 'Local mode' && await page.locator('.composer-input').getAttribute('placeholder') === 'Describe a task, @ to add files';
+        && await page.locator('.local-mode, .composer-status').count() === 0 && await page.locator('.composer-input').getAttribute('placeholder') === 'Describe a task, @ to add files';
     });
     await check('预览深链保留工具条，三栏展示真实产物', async () => {
       await page.goto(base + '/scripts/ui-preview.html?theme=dark');

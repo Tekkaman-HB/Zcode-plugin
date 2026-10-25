@@ -1,12 +1,12 @@
 /**
  * [INPUT]: 消费 ../bridge、../../protocol/types、./render、./icons、./clipboard、./format、./events、./i18n 和 ./quotaRings
- * [OUTPUT]: MenuHost/MenuController，统一模型与横排低/中/高思考强度（原始值发送、缺档禁用）、权限模式、附件、聊天操作、设置、历史搜索、上下文和额度菜单，提供键盘导航/定位/焦点恢复
+ * [OUTPUT]: MenuHost/MenuController，统一模型与横排低/中/高思考强度（原始值发送、缺档禁用）、20px 语义权限模式、附件、聊天操作、设置、历史搜索、上下文和额度菜单，提供键盘导航/定位/焦点恢复；处理中使用统一文字扫光
  * [POS]: webview 弹层菜单唯一实现；ChatApp 装配，ComposerController 复用 slash/@ 导航设施
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { AvailableModel } from '../../protocol/types';
 import type { FromWebviewMessage, QuotaUsagePayload } from '../bridge';
-import { h, relTime } from './render';
+import { h, relTime, processingLabel } from './render';
 import { MODE_ICONS, iconEl } from './icons';
 import { copyText } from './clipboard';
 import { formatTokens, fmtContext, sourceLabel, sourceColor, formatTokensLocale, fmtContextLocale, reasoningChoices } from './format';
@@ -245,7 +245,7 @@ export class MenuController {
           onclick: () => { if (level.value) select(active, level.value); } }, level.label));
       }
     }
-    if (!models.length) list.append(h('div', { class: 'menu-empty' }, host.t(host.serverState === 'starting' ? 'starting' : 'noResults')));
+    if (!models.length) list.append(h('div', { class: 'menu-empty' }, host.serverState === 'starting' ? processingLabel(host.t('starting')) : host.t('noResults')));
     this.showPopup(host.modelBtn, list);
   }
 
@@ -409,7 +409,7 @@ export class MenuController {
     item(host.locale === 'zh-CN' ? '在 ZCode 桌面端打开' : 'Open in ZCode desktop', () => host.post({ kind: 'open-in-desktop' }));
     item(host.t('mcpServers'), () => {
       host.mcpServers = null;
-      this.showPopup(host.gearBtn, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, '…')));
+      this.showPopup(host.gearBtn, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, processingLabel(this.host.t('loading')))));
       host.post({ kind: 'mcp-servers' });
     });
     item(host.t('commands'), () => { host.composerInput.value = '/'; host.composerInput.focus(); host.onInput(); });
@@ -423,7 +423,7 @@ export class MenuController {
     const m = host.mcp;
     const servers = host.mcpServers;
     if (!servers) {
-      list.append(h('div', { class: 'menu-empty' }, '…'));
+      list.append(h('div', { class: 'menu-empty' }, processingLabel(this.host.t('loading'))));
     } else if (!servers.length) {
       list.append(h('div', { class: 'menu-empty' }, host.t('noResults')));
     } else {
@@ -457,7 +457,7 @@ export class MenuController {
     const cur = String(host.session?.settings.mode.current ?? host.session?.projection.mode ?? host.defaultMode);
     const list = h('div', { class: 'menu mode-menu' });
     list.append(h('div', { class: 'menu-group' }, host.t('modes')));
-    // 菜单永远可开：四模式是静态选项，不依赖会话数据（图标与 chip 共用 MODE_ICONS）
+    // 菜单永远可开：四模式是静态选项，不依赖会话数据（菜单与输入区入口共用 MODE_ICONS 语义映射）
     // 命名与描述对齐 ZCode 桌面端：计划模式/变更前确认/自动编辑/完全访问
     const NAMES: Record<string, { zh: string; en: string }> = {
       plan: { zh: '计划模式', en: 'Plan' },
@@ -473,9 +473,9 @@ export class MenuController {
     };
     const zh = host.locale === 'zh-CN';
     for (const mode of ['plan', 'build', 'edit', 'yolo'] as const) {
-      const icon = h('span', { class: 'mode-icon' });
-      icon.innerHTML = MODE_ICONS[mode] ?? '';
-      const row = h('button', { type: 'button', role: 'menuitemradio', 'aria-checked': String(cur === mode), class: `menu-item mode-item ${cur === mode ? 'selected' : ''}`, onclick: () => { host.post({ kind: 'set-mode', mode }); this.hidePopup(); } },
+      const icon = iconEl(MODE_ICONS[mode]);
+      icon.classList.add('mode-icon');
+      const row = h('button', { type: 'button', role: 'menuitemradio', 'aria-checked': String(cur === mode), class: `menu-item mode-item${mode === 'yolo' ? ' full-access' : ''} ${cur === mode ? 'selected' : ''}`, onclick: () => { host.post({ kind: 'set-mode', mode }); this.hidePopup(); } },
         icon,
         h('div', { class: 'mode-text' },
           h('div', { class: 'mode-name' }, zh ? NAMES[mode].zh : NAMES[mode].en),
@@ -497,7 +497,7 @@ export class MenuController {
     }
     this.hidePopup();
     this.sessionsMenuOpen = true;
-    this.showPopup(this.host.historyBtn, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, '…')));
+    this.showPopup(this.host.historyBtn, h('div', { class: 'menu' }, h('div', { class: 'menu-empty' }, processingLabel(this.host.t('loading')))));
     this.host.post({ kind: 'list-sessions' });
   }
 
@@ -520,7 +520,7 @@ export class MenuController {
         rows.append(h('button', { type: 'button', role: 'menuitemradio', tabindex: '-1',
           'aria-checked': String(selected), class: `menu-item session-menu-item ${selected ? 'selected' : ''}`,
           onclick: () => { this.hidePopup(); host.post({ kind: 'resume', sessionId: s.sessionId }); } },
-          h('span', { class: 'session-menu-name', title: s.title || host.t('newSession') }, s.title || host.t('newSession')),
+          h('span', { class: 'session-menu-name', title: s.title || host.t('newSession') }, s.status === 'running' ? processingLabel(s.title || host.t('newSession')) : s.title || host.t('newSession')),
           h('span', { class: 'session-menu-meta' }, relTime(s.updatedAt, host.t)),
           s.status === 'running' ? h('span', { class: 'session-item-running', title: host.t('running') }) : selected ? iconEl('check') : null));
       }

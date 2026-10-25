@@ -1,12 +1,12 @@
 /**
- * [INPUT]: 依赖 ../bridge 的配对载荷、./render 的 DOM 工厂、./icons 和 ./i18n
+ * [INPUT]: 依赖 ../bridge 的配对载荷、./render 的 DOM 工厂与 processingLabel、./icons 和 ./i18n
  * [OUTPUT]: 对外提供 PanelsController/PanelsHost，管理附件预览和手机配对对话框
  * [POS]: webview 的模态展示层；ChatApp 保留载荷，控制器处理焦点、键盘与弹层生命周期
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { PairingPanelPayload, FromWebviewMessage } from '../bridge';
 import type { Translate, Locale } from './i18n';
-import { h } from './render';
+import { h, processingLabel } from './render';
 import { phoneIconEl, iconEl } from './icons';
 
 export interface PanelsHost {
@@ -112,7 +112,7 @@ export class PanelsController {
     const head = h('div', { class: 'pair-head' }, phoneIconEl(), h('span', {}, this.host.t('pairTitle')));
     const stateRow = h('div', { class: `pair-state ${status}` },
       h('span', { class: 'pair-dot' }),
-      h('span', {}, statusLabel)
+      status === 'starting' ? processingLabel(statusLabel) : h('span', {}, statusLabel)
     );
     const qrBox = h('div', { class: 'pair-qr' });
     // starting（重连中）保留上次二维码置灰显示——QR→"…"→QR 的来回替换就是肉眼闪烁

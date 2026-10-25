@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无运行时依赖，消费 ../protocol/types 的协议类型
- * [OUTPUT]: 对外提供 ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload / PairingPanelPayload（扩展↔webview 消息契约与载荷类型；pair-* 双向消息承载手机配对面板）
+ * [OUTPUT]: ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload / PairingPanelPayload / SessionChangesPayload；含会话归属/完整性状态、摘要和审查入口
  * [POS]: ui 的桥接类型层，extension 侧与 webview 侧共同消费，保证两端契约同构
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -95,7 +95,17 @@ export interface PairingPanelPayload {
   identity?: string;
 }
 
+export interface SessionChangesPayload {
+  sessionId: string;
+  status: 'ready' | 'missing' | 'partial' | 'error' | 'preparing';
+  files: number;
+  added: number;
+  deleted: number;
+  binary: number;
+}
+
 export type ToWebviewMessage =
+  | { kind: 'session-changes'; data: SessionChangesPayload }
   | { kind: 'bootstrap'; data: BootstrapPayload }
   | { kind: 'server-state'; state: ServerState; detail?: string }
   | { kind: 'account'; data: AccountStatus | null }
@@ -123,6 +133,7 @@ export type ToWebviewMessage =
 // ═══════════════ webview → 扩展 ═══════════════
 
 export type FromWebviewMessage =
+  | { kind: 'review-changes' }
   | { kind: 'send'; content: string; attachments?: AttachmentRef[] }
   | { kind: 'attach-pick' }
   | { kind: 'save-image'; dataUrl: string; name: string }
