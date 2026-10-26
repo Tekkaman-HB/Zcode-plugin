@@ -1,11 +1,11 @@
 /**
  * [INPUT]: esbuild、临时文件系统、真实 ChatViewProvider 与 theme-check 浏览器/fixture 消息桥
- * [OUTPUT]: composerChecks，验证中英文粘贴图片经宿主落盘后恢复发送，保留缩略图与真实文件路径；验证历史恢复/实时回流/同名附件与文件选择的真实图片预览
+ * [OUTPUT]: composerChecks，验证中英文粘贴图片经宿主落盘后恢复发送，保留缩略图与真实文件路径；验证停止/完成回合后的 artifact 持久图片、历史恢复/实时回流/同名附件与文件选择的真实图片预览
  * [POS]: scripts/ 的附件链路回归；连接真实宿主处理器和 webview，隔离临时目录，无 CLI/模型请求
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { build } from 'esbuild';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -30,7 +30,7 @@ export async function composerChecks(sourcePage, check) {
         build.onResolve({ filter: /^(vscode|node:os)$/ }, args => ({ path: args.path, namespace: 'test' }));
         build.onLoad({ filter: /.*/, namespace: 'test' }, args => ({ contents: args.path === 'vscode'
           ? `export const env = { language: 'zh-CN' }, Uri = {}, workspace = { fs: { stat: async uri => (await import('node:fs/promises')).stat(uri.fsPath) } }, window = { showOpenDialog: async () => globalThis.__picked }, commands = {}, FileSystemError = {}, FileType = {}, FilePermission = {}, EventEmitter = class {}, Disposable = class {};`
-          : `export const tmpdir = () => ${JSON.stringify(temp)};` }));
+          : `export const tmpdir = () => ${JSON.stringify(temp)}, homedir = () => ${JSON.stringify(temp)};` }));
       } }] });
     const { ChatViewProvider } = await import(output);
     const provider = new ChatViewProvider({ locale: 'zh-CN', controller: () => null, server: () => null });
@@ -110,6 +110,60 @@ export async function composerChecks(sourcePage, check) {
       provider.post({ kind: 'session-event', data: { type: 'message.upserted', sessionId: 's1', payload: { message: snapshot.messages[0] } } });
       await page.waitForSelector('.msg-attach-thumb');
       await page.waitForFunction(() => document.querySelector('.msg-attach-thumb')?.naturalWidth > 0);
+      return true;
+    });
+    for (const completion of ['turn.failed', 'turn.completed']) await check(`${completion} 后 artifact 图片可预览，原临时图删除仍可恢复历史`, async () => {
+      await load('&scene=empty');
+      provider.post({ kind: 'session-snapshot', data: await page.evaluate(() => window.__fixture.makeSnapshot('empty')) });
+      const file = path.join(temp, '1.png');
+      const dataUrl = 'data:image/png;base64,' + image;
+      await writeFile(file, Buffer.from(image, 'base64'));
+      globalThis.__picked = [{ path: file, fsPath: file }];
+      await provider.onMessage({ kind: 'attach-pick' });
+      await page.waitForSelector('.attach-thumb');
+      await page.locator('.composer-input').fill('测试一下截图，不要修改代码');
+      await page.locator('.send-btn').click();
+      provider.post({ kind: 'optimistic-user', data: { id: 'local-stopped', text: '测试一下截图，不要修改代码', attachments: [{ name: '1.png' }] } });
+      await page.locator('.msg-attachment-img').click();
+      await page.waitForSelector('.preview-img');
+      await page.keyboard.press('Escape');
+      const artifactId = 'tool-result-00000000-0000-4000-8000-000000000000';
+      const sessionId = 'sess_11111111-1111-4111-8111-111111111111';
+      const dir = path.join(temp, '.zcode/cli/artifacts', sessionId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, 'attachment-1-' + artifactId + '.txt'), dataUrl);
+      await rm(file);
+      const snapshot = await page.evaluate(({ sessionId, artifactId, file }) => {
+        const f = window.__fixture, data = f.makeSnapshot('empty');
+        data.messages = [f.message('stored-user', 'user', [f.text('测试一下截图，不要修改代码'), {
+          type: 'file', filename: '1.png', mime: 'image/png',
+          url: 'zcode-artifact://' + sessionId + '/' + artifactId,
+          source: { type: 'file', path: file },
+          metadata: { originalUrl: file, storageKind: 'artifact', recoverability: 'provider_ready' }
+        }])];
+        return data;
+      }, { sessionId, artifactId, file });
+      provider.post({ kind: 'session-event', data: { type: 'session.updated', sessionId: 's1', payload: { status: 'running' } } });
+      await page.waitForSelector('.send-btn.stop');
+      if (completion === 'turn.failed') {
+        await page.locator('.send-btn').click();
+        assert.equal(await page.evaluate(() => window.__sent.at(-1).kind), 'stop');
+      }
+      provider.post({ kind: 'session-event', data: { type: completion, sessionId: 's1', payload: {} } });
+      provider.post({ kind: 'messages', data: { messages: snapshot.messages } });
+      await page.waitForSelector('[data-message-id="stored-user"]');
+      await page.waitForFunction(() => document.querySelector('.msg-attach-thumb')?.naturalWidth > 0, null, { timeout: 3000 });
+      await page.locator('.msg-attachment-img').click();
+      await page.waitForSelector('.preview-img', { timeout: 3000 });
+      assert.equal(await page.locator('.preview-img').getAttribute('src'), dataUrl);
+      await page.waitForFunction(() => document.querySelector('.preview-img')?.naturalWidth > 0);
+      await page.keyboard.press('Escape');
+      await load('&scene=empty');
+      provider.post({ kind: 'session-snapshot', data: snapshot });
+      await page.waitForFunction(() => document.querySelector('.msg-attach-thumb')?.naturalWidth > 0, null, { timeout: 3000 });
+      await page.locator('.msg-attachment-img').click();
+      await page.waitForSelector('.preview-img');
+      assert.equal(await page.locator('.preview-img').getAttribute('src'), dataUrl);
       return true;
     });
     await check('已删除的历史图片保留文件名，不显示破图或错误预览', async () => {

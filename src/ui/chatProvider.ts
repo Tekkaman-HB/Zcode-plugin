@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 vscode、node:fs/promises 的本地图片读取和 node:url 的文件 URL 解析，消费 ./changeReview、./sessionChanges、../sessionController、./bridge、../environment、../account、../pairingController（懒引用）
- * [OUTPUT]: ChatViewProvider；桥接会话/配对/用量刷新，粘贴图落盘回包保留原请求名称，本地图片按 URL 异步恢复预览；选择会话差异记录、推送摘要并管理原生 diff 审查视图
+ * [OUTPUT]: ChatViewProvider；桥接会话/配对/用量刷新，粘贴图落盘回包保留原请求名称，本地/artifact 图片按 URL 异步恢复预览；选择会话差异记录、推送摘要并管理原生 diff 审查视图
  * [POS]: ui 的聊天视图提供者，extension.ts 注册；与 webview/main.ts 通过 bridge 契约通信
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -121,16 +121,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async readImagePreview(url: string, mime?: string): Promise<string | undefined> {
     try {
-      const file = url.startsWith('file:') ? fileURLToPath(url) : url;
+      let file = url.startsWith('file:') ? fileURLToPath(url) : url;
+      const artifact = url.startsWith('zcode-artifact://');
+      if (artifact) {
+        // CLI 落档后改用 artifact URI；独立副本中的 data URL 不受原临时文件覆盖/清理影响。
+        const uri = new URL(url);
+        const sessionId = uri.hostname;
+        const artifactId = uri.pathname.slice(1);
+        if (!/^[a-zA-Z0-9_-]+$/.test(sessionId) || !/^[a-zA-Z0-9_-]+$/.test(artifactId)) return;
+        const dir = path.join(os.homedir(), '.zcode', 'cli', 'artifacts', sessionId);
+        const matches = (await fs.readdir(dir)).filter(name => name.endsWith(`-${artifactId}.txt`));
+        if (matches.length !== 1) return;
+        file = path.join(dir, matches[0]);
+      }
       if (!path.isAbsolute(file)) return;
       // 保护目录不参与自动读取；realpath 同时覆盖符号链接。
       const resolved = await fs.realpath(file);
       if (/[\\/]docs[\\/](60-marketing|70-research|99-archive)([\\/]|$)/.test(resolved)) return;
       const imageMime = ATTACH_MIME[path.extname(resolved).slice(1).toLowerCase()] ?? mime;
-      if (!imageMime?.startsWith('image/')) return;
+      if (!artifact && !imageMime?.startsWith('image/')) return;
       const stat = await fs.stat(resolved);
       if (!stat.isFile() || stat.size > MAX_ATTACHMENT_SIZE) return;
-      return `data:${imageMime};base64,${(await fs.readFile(resolved)).toString('base64')}`;
+      const data = await fs.readFile(resolved);
+      if (artifact) {
+        const dataUrl = data.toString('utf8').trim();
+        return /^data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=\r\n]+$/.test(dataUrl) ? dataUrl : undefined;
+      }
+      return `data:${imageMime};base64,${data.toString('base64')}`;
     } catch {
       return; // 历史附件可能已被删除；消息仍可显示文件名。
     }
