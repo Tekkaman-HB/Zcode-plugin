@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 真实 out/webview/main.js 的消息桥；仅使用本文件内的模拟会话数据
- * [OUTPUT]: UI 预览和 theme-check 共用的 __fixture / acquireVsCodeApi 桩（服务就绪用 ready，GLM 三档用 low/high/max），MCP 清单显式带连接状态，不启动 CLI 或请求网络
+ * [OUTPUT]: UI 预览和 theme-check 共用的 __fixture / acquireVsCodeApi 桩；可委托 __saveImage 接入真实宿主，服务就绪用 ready，GLM 三档用 low/high/max，不启动 CLI 或请求网络
  * [POS]: scripts/ 的界面场景层；ui-live.html 挂载，ui-preview.html 承载主题对比
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -84,7 +84,10 @@
         if (m.kind === 'list-files') post({ kind: 'files-list', data: { dir: m.dir || '', entries: m.dir ? [{ name: 'chat.ts', kind: 'file' }] : [{ name: 'src', kind: 'dir' }, { name: 'README.md', kind: 'file' }] } });
         if (m.kind === 'attach-pick') post({ kind: 'attachments-picked', data: { attachments: [{ name: 'README.md', path: '/workspace/zcode-plugin/README.md', mime: 'text/markdown' }] } });
         if (m.kind === 'mcp-servers') post({ kind: 'mcp-servers', data: { running: true, servers: [{ name: 'codegraph', pid: 1234, source: 'workspace', connected: true }] } });
-        if (m.kind === 'save-image') post({ kind: 'image-saved', data: { path: `/tmp/${m.name}`, name: m.name, mime: 'image/png' } });
+        if (m.kind === 'save-image') {
+          if (window.__saveImage) void window.__saveImage(m);
+          else post({ kind: 'image-saved', data: { path: `/tmp/${m.name}`, name: m.name, mime: 'image/png' } });
+        }
       });
     }
   });

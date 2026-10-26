@@ -1,6 +1,6 @@
 /**
- * [INPUT]: node:fs/path/child_process、全局 playwright、./preview-server、loading/tool-activity/mcp-check 与真实 out/webview 产物
- * [OUTPUT]: 真实产物 UI 回归（含 MCP 清单/连接灯/未连接置顶）；含套餐/上下文同排圆环几何与键盘/缺失数据、处理状态扫光/刷新续播/无秒表与旋转/无障碍、底部会话 diff 摘要/迟到消息隔离/无记录隐藏与部分记录/点击/四主题/窄栏/空态、首响等待、权限图标、段距/工具分组/跨消息密度与 Codex 图标/流式 DOM 复用与既有交互
+ * [INPUT]: node:fs/path/child_process、全局 playwright、./preview-server、loading/tool-activity/mcp/composer-check 与真实 out/webview 产物
+ * [OUTPUT]: 真实产物 UI 回归（含中英文图片经宿主落盘后的发送、MCP 清单/连接灯/未连接置顶）；含套餐/上下文同排圆环几何与键盘/缺失数据、处理状态扫光/刷新续播/无秒表与旋转/无障碍、底部会话 diff 摘要/迟到消息隔离/无记录隐藏与部分记录/点击/四主题/窄栏/空态、首响等待、权限图标、段距/工具分组/跨消息密度与 Codex 图标/流式 DOM 复用与既有交互
  * [POS]: scripts/ 的自动界面验收层，与 ui-preview.mjs 共用 ui-live.html 场景，无 CLI 或网络请求
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -12,6 +12,7 @@ import { serveOnFreePort } from './preview-server.mjs';
 import { loadingChecks } from './loading-check.mjs';
 import { toolActivityChecks } from './tool-activity-check.mjs';
 import { mcpChecks } from './mcp-check.mjs';
+import { composerChecks } from './composer-check.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 let failures = 0;
@@ -68,6 +69,7 @@ async function browserChecks() {
     await loadingChecks(page, load, check);
     await toolActivityChecks(page, load, check);
     await mcpChecks(page, load, check);
+    await composerChecks(page, check);
     const lastSent = kind => page.evaluate(kind => window.__sent.filter(m => m.kind === kind).at(-1), kind);
     await check('底部 diff 摘要固定在输入框上方，统计/点击与空态更新正确', async () => {
       await load();

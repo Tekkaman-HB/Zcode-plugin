@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 vscode，消费 ./changeReview、./sessionChanges、../sessionController、./bridge、../environment、../account、../pairingController（懒引用）
- * [OUTPUT]: ChatViewProvider；桥接会话/配对/用量刷新，选择会话差异记录、推送摘要并管理原生 diff 审查视图；回合记录独立于视图
+ * [OUTPUT]: ChatViewProvider；桥接会话/配对/用量刷新，粘贴图落盘回包保留原请求名称；选择会话差异记录、推送摘要并管理原生 diff 审查视图
  * [POS]: ui 的聊天视图提供者，extension.ts 注册；与 webview/main.ts 通过 bridge 契约通信
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -167,9 +167,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const stem = path.basename(msg.name.replace(/\.[^.]+$/, '') || 'image').replace(/[^a-zA-Z0-9._-]/g, '') || 'image';
           const file = path.resolve(dir, `${stem}.${ext}`);
           if (!file.startsWith(dir + path.sep)) break;
-          const name = path.basename(file);
           await fs.writeFile(file, Buffer.from(m2[2], 'base64'));
-          this.post({ kind: 'image-saved', data: { path: file, name, mime: m2[1] } });
+          // 名称同时是 webview 的等待键；磁盘 basename 清理后不能用于匹配原请求。
+          this.post({ kind: 'image-saved', data: { path: file, name: msg.name, mime: m2[1] } });
           break;
         }
         case 'list-files': {

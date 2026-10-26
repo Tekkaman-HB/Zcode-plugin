@@ -56,7 +56,7 @@ LICENSE - MIT
 - **排队/插队**：app-server 的 `session/send` 在回合运行中必拒（-32010 active prompt exists）；**sendNow 捕获 -32010 自动转排队**（busy 标志与服务器失步时的自愈——事件错过致 busy=false 但回合实际在跑，报错改入队+busy 重新置 true）；steerTurn 是 runtime 内部方法不在协议面——运行中补充输入由宿主侧排队、turn.completed/failed 后自动出队（对标桌面端 queue auto-drain）；contextUsed 仅在 ModelComplete/TurnComplete 内部事件时更新（流式期间不动是协议行为）
 
 - **排队管理器**：排队条目带全文 + 立即发送（prioritize：stop 中止当前回合 → 该条提至队首 → turn.failed/completed 事件触发 drain 自动发出）+ 删除；queued-update 消息携带 items 全文数组供 UI 渲染
-- **发送按钮供能规则**：输入框有内容（文字/附件）→ 发送态（点击=发送，运行中=入队）；输入框为空且回合运行中 → 停止态（点击=中止）。按钮状态随输入内容实时刷新（updateSendAffordance），不单看会话状态；turn.completed/failed 时投影 status 强制归位 idle
+- **发送按钮供能规则**：输入框有内容（文字/附件）→ 发送态（点击=发送，运行中=入队）；输入框为空且回合运行中 → 停止态（点击=中止）。按钮状态随输入内容实时刷新（updateSendAffordance），不单看会话状态；turn.completed/failed 时投影 status 强制归位 idle。粘贴图的 `image-saved.data.name` 必须保留 `save-image.name` 原值，供 pastePending 匹配与清理；不能返回清理过的磁盘 basename，否则中文“图片1.png”变为“1.png”，发送永久禁用且缩略图丢失。
 
 - **busy 看门狗**：15s 间隔检查——busy 超 120s 且无任何会话事件 → 强制解锁 busy、UI 归位 idle、触发排队 drain。newSession 时 busy/队列/看门狗全量复位（会话=全新生命周期，服务重启后 busy 卡死的根治）
 
