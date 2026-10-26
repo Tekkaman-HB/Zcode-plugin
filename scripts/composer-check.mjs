@@ -1,13 +1,14 @@
 /**
  * [INPUT]: esbuild、临时文件系统、真实 ChatViewProvider 与 theme-check 浏览器/fixture 消息桥
- * [OUTPUT]: composerChecks，验证中英文粘贴图片经宿主落盘后恢复发送，保留缩略图与真实文件路径
+ * [OUTPUT]: composerChecks，验证中英文粘贴图片经宿主落盘后恢复发送，保留缩略图与真实文件路径；验证历史恢复/实时回流/同名附件与文件选择的真实图片预览
  * [POS]: scripts/ 的附件链路回归；连接真实宿主处理器和 webview，隔离临时目录，无 CLI/模型请求
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { build } from 'esbuild';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 
 const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jE9kAAAAASUVORK5CYII=';
@@ -28,7 +29,7 @@ export async function composerChecks(sourcePage, check) {
       plugins: [{ name: 'host-double', setup(build) {
         build.onResolve({ filter: /^(vscode|node:os)$/ }, args => ({ path: args.path, namespace: 'test' }));
         build.onLoad({ filter: /.*/, namespace: 'test' }, args => ({ contents: args.path === 'vscode'
-          ? `export const env = { language: 'zh-CN' }, Uri = {}, workspace = {}, window = {}, commands = {}, FileSystemError = {}, FileType = {}, FilePermission = {}, EventEmitter = class {}, Disposable = class {};`
+          ? `export const env = { language: 'zh-CN' }, Uri = {}, workspace = { fs: { stat: async uri => (await import('node:fs/promises')).stat(uri.fsPath) } }, window = { showOpenDialog: async () => globalThis.__picked }, commands = {}, FileSystemError = {}, FileType = {}, FilePermission = {}, EventEmitter = class {}, Disposable = class {};`
           : `export const tmpdir = () => ${JSON.stringify(temp)};` }));
       } }] });
     const { ChatViewProvider } = await import(output);
@@ -72,7 +73,78 @@ export async function composerChecks(sourcePage, check) {
         return true;
       });
     }
+    await check('历史本地图片恢复缩略图，点击可预览且同名附件不串图', async () => {
+      await load('&scene=empty');
+      const files = replies.filter(msg => msg.kind === 'image-saved').slice(-2).map(msg => msg.data.path);
+      await writeFile(files[1], Buffer.concat([Buffer.from(image, 'base64'), Buffer.from('different-image')]));
+      const urls = files.map(file => pathToFileURL(file).href);
+      const snapshot = await page.evaluate(urls => {
+        const f = window.__fixture, data = f.makeSnapshot('empty');
+        data.messages = urls.map((url, i) => f.message('history-' + i, 'user', [
+          { type: 'file', filename: '1.png', mime: 'image/png', url }
+        ]));
+        return data;
+      }, urls);
+      // 保留真实 post 路径，把宿主回包接入页面，而非伪造预览数据。
+      delete provider.post;
+      provider.host.sessionChanges = { select() {} };
+      provider.host.workspacePath = () => temp;
+      provider.view = { webview: { postMessage: msg => page.evaluate(msg => window.__fixture.post(msg), msg) } };
+      provider.post({ kind: 'session-snapshot', data: snapshot });
+      await page.waitForSelector('.msg-attach-thumb');
+      await page.waitForFunction(() => [...document.querySelectorAll('.msg-attach-thumb')].every(img => img.naturalWidth > 0), null, { timeout: 3000 });
+      for (let i = 0; i < files.length; i++) {
+        const expected = 'data:image/png;base64,' + (await readFile(files[i])).toString('base64');
+        assert.equal(await page.locator('.msg-attach-thumb').nth(i).getAttribute('src'), expected);
+        await page.locator('.msg-attachment-img').nth(i).click();
+        await page.waitForSelector('.preview-img');
+        assert.equal(await page.locator('.preview-img').getAttribute('src'), expected);
+        await page.waitForFunction(() => document.querySelector('.preview-img')?.naturalWidth > 0);
+        await page.keyboard.press('Escape');
+      }
+      // 同一数据经权威刷新与实时事件回流也必须保留缩略图和预览。
+      provider.post({ kind: 'messages', data: { messages: snapshot.messages } });
+      await page.waitForFunction(() => [...document.querySelectorAll('.msg-attach-thumb')].every(img => img.naturalWidth > 0));
+      await load('&scene=empty');
+      provider.post({ kind: 'session-snapshot', data: { ...snapshot, messages: [] } });
+      provider.post({ kind: 'session-event', data: { type: 'message.upserted', sessionId: 's1', payload: { message: snapshot.messages[0] } } });
+      await page.waitForSelector('.msg-attach-thumb');
+      await page.waitForFunction(() => document.querySelector('.msg-attach-thumb')?.naturalWidth > 0);
+      return true;
+    });
+    await check('已删除的历史图片保留文件名，不显示破图或错误预览', async () => {
+      await load('&scene=empty');
+      const data = await page.evaluate(url => {
+        const f = window.__fixture, data = f.makeSnapshot('empty');
+        data.messages = [f.message('missing-file', 'user', [{ type: 'file', filename: 'missing.png', mime: 'image/png', url }])];
+        return data;
+      }, pathToFileURL(path.join(temp, 'missing.png')).href);
+      provider.post({ kind: 'session-snapshot', data });
+      await page.waitForSelector('.msg-attachment-img');
+      assert.equal(await page.locator('.msg-attach-thumb').isVisible(), false);
+      await page.locator('.msg-attachment-img').click();
+      await page.waitForSelector('.error-toast');
+      assert.equal(await page.locator('.preview-img').count(), 0);
+      return true;
+    });
+    await check('选择本地图片立即带缩略图，发送后附件可点击预览', async () => {
+      await load('&scene=empty');
+      const file = replies.find(msg => msg.kind === 'image-saved').data.path;
+      globalThis.__picked = [{ path: file, fsPath: file }];
+      await provider.onMessage({ kind: 'attach-pick' });
+      await page.waitForSelector('.attach-thumb');
+      await page.waitForFunction(() => document.querySelector('.attach-thumb')?.naturalWidth > 0);
+      await page.locator('.send-btn').click();
+      const sent = await page.evaluate(() => window.__sent.filter(msg => msg.kind === 'send').at(-1));
+      assert.equal(sent.attachments[0].path, file);
+      provider.post({ kind: 'optimistic-user', data: { id: 'local-picked', text: '', attachments: [{ name: sent.attachments[0].name }] } });
+      await page.locator('.msg-attachment-img').click();
+      await page.waitForSelector('.preview-img');
+      await page.waitForFunction(() => document.querySelector('.preview-img')?.naturalWidth > 0);
+      return true;
+    });
   } finally {
+    delete globalThis.__picked;
     await page.close();
     await rm(temp, { recursive: true, force: true });
   }

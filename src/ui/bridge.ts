@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无运行时依赖，消费 ../protocol/types 的协议类型
- * [OUTPUT]: ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload / PairingPanelPayload / SessionChangesPayload；含会话归属/完整性状态、摘要和审查入口，以及 McpServerEntry 的可选 pid/三态连接
+ * [OUTPUT]: ToWebviewMessage / FromWebviewMessage / QuotaUsagePayload / PairingPanelPayload / SessionChangesPayload；含附件预览按原 URL 回填、会话归属/完整性状态、摘要和审查入口，以及 McpServerEntry 的可选 pid/三态连接
  * [POS]: ui 的桥接类型层，extension 侧与 webview 侧共同消费，保证两端契约同构
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -134,6 +134,7 @@ export type ToWebviewMessage =
   | { kind: 'attachments-picked'; data: { attachments: AttachmentRef[] } }
   | { kind: 'files-list'; data: { dir: string; entries: DirEntry[] } }
   | { kind: 'show-preview'; data: { name: string; mime: string; dataUrl: string } }
+  | { kind: 'attachment-preview'; data: { url: string; dataUrl: string } }
   | { kind: 'image-saved'; data: { path: string; name: string; mime: string } }
   | { kind: 'pair-status'; data: PairingPanelPayload }
   | { kind: 'error'; message: string };

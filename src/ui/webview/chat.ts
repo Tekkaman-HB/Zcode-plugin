@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费协议/bridge 契约、./events、./queue；委托 ./shell、./changes、./composer、./panels、./menus、./todoPanel、./quotaRings 与 ./render
- * [OUTPUT]: ChatApp 共享状态与桥接入口；按会话 id 分发 diff 汇总并在切换时清空旧摘要、流式分块 Markdown/工具复用、消息完成边界校准思考用时、首响等待/空态同步、ready 发送和滚动跟随；MCP 清单保留未连接/未知项
+ * [OUTPUT]: ChatApp 共享状态与桥接入口；按附件 URL 接收预览并回填缩略图；按会话 id 分发 diff 汇总并在切换时清空旧摘要、流式分块 Markdown/工具复用、消息完成边界校准思考用时、首响等待/空态同步、ready 发送和滚动跟随；MCP 清单保留未连接/未知项
  * [POS]: webview 中枢与各 Host 接口的实现者；布局、输入、模态和菜单分别由子模块负责
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -340,6 +340,7 @@ export class ChatApp {
         this.updateSendAffordance();
         break;
       }
+      case 'attachment-preview': this.previewRegistry.set(msg.data.url, msg.data.dataUrl); this.hydrateAttachmentThumbs(); break;
       case 'files-list':
         this.dirEntries = msg.data;
         this.renderAtPopup();
@@ -625,6 +626,7 @@ export class ChatApp {
     renderResponseWait(this);
     this.scrollBottom();
     this.refreshTodoPanel();
+    this.hydrateAttachmentThumbs();
   }
 
   markDirtyPermissions(): void {

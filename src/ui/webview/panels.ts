@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ../bridge 的配对载荷、./render 的 DOM 工厂与 processingLabel、./icons 和 ./i18n
- * [OUTPUT]: 对外提供 PanelsController/PanelsHost，管理附件预览和手机配对对话框
+ * [OUTPUT]: 对外提供 PanelsController/PanelsHost，按原 URL 查找附件预览，管理手机配对对话框
  * [POS]: webview 的模态展示层；ChatApp 保留载荷，控制器处理焦点、键盘与弹层生命周期
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -47,7 +47,7 @@ export class PanelsController {
   }
 
   openPreview(name: string, url?: string): void {
-    const src = this.host.previewRegistry.get(name)
+    const src = this.host.previewRegistry.get(url || name)
       ?? (url && /^(data:|https:)/.test(url) ? url : undefined);
     this.closePreview();
     this.previousFocus = document.activeElement as HTMLElement;

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ../bridge 的附件/消息契约、./render 的 DOM 工厂、./events 的会话快照、./i18n 和 ./icons
- * [OUTPUT]: 对外提供 ComposerController/ComposerHost，负责输入、附件、引用、斜杠命令、发送/停止和队列展示
+ * [OUTPUT]: 对外提供 ComposerController/ComposerHost，按原 URL 回填消息缩略图，负责输入、附件、引用、斜杠命令、发送/停止和队列展示
  * [POS]: webview 输入交互层；ChatApp 是状态唯一持有者，菜单导航委托 MenuController
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -47,11 +47,12 @@ export class ComposerController {
   hydrateAttachmentThumbs(): void {
     this.host.messagesEl.querySelectorAll('.msg-attachment-img .msg-attach-thumb').forEach((img) => {
       const el = img as HTMLImageElement;
-      if (el.src) return;
+      if (el.getAttribute('src')) return;
       const chip = el.closest('.msg-attachment-img') as HTMLElement | null;
       const name = chip?.querySelector('.attach-chip-name')?.textContent ?? '';
-      const data = this.host.previewRegistry.get(name);
-      if (data) el.src = data;
+      const url = el.dataset.attachmentUrl;
+      const data = this.host.previewRegistry.get(url || name);
+      if (data) { el.src = data; el.hidden = false; }
     });
   }
 

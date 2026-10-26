@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../../protocol/types、./markdown、./format、./i18n、./icons 与 ./clipboard；流式活性由 chat.ts 传入
- * [OUTPUT]: DOM/消息/部件/diff 渲染器、processingLabel、updateStreamingText 与 renderPendingResponse；纯工具消息紧凑排列，过滤空文本/回合边界；思考落档显示服务端固定用时，工具图标按 Codex 语义分流
+ * [OUTPUT]: DOM/消息/部件/diff 渲染器（附件携原 URL 等待预览，失效缩略图隐藏）、processingLabel、updateStreamingText 与 renderPendingResponse；纯工具消息紧凑排列，过滤空文本/回合边界；思考落档显示服务端固定用时，工具图标按 Codex 语义分流
  * [POS]: webview 渲染层；保存工具展开与流式尾块缓存，chat.ts 持有会话状态；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -349,9 +349,10 @@ export function renderMessage(msg: SessionMessage, t: Translate, onAttachment?: 
           title: name
         });
         if (isImg) {
-          // 图片附件：缩略图 + 文件名（预览数据由 chat 层的 registry 提供）
-          const img = h('img', { class: 'msg-attach-thumb', alt: name });
-          if (/^(data:|https?:)/.test(fp.url ?? '')) img.src = fp.url!;
+          // 本地路径由宿主回填数据；未加载或失效时隐藏图片，避免破图图标。
+          const img = h('img', { class: 'msg-attach-thumb', alt: '', hidden: true, 'data-attachment-url': fp.url ?? '' });
+          img.addEventListener('error', () => { img.hidden = true; });
+          if (/^(data:|https:)/.test(fp.url ?? '')) { img.src = fp.url!; img.hidden = false; }
           chip.append(img, h('span', { class: 'attach-chip-name' }, name));
         } else {
           chip.textContent = name;

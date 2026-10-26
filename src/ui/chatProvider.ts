@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 vscode，消费 ./changeReview、./sessionChanges、../sessionController、./bridge、../environment、../account、../pairingController（懒引用）
- * [OUTPUT]: ChatViewProvider；桥接会话/配对/用量刷新，粘贴图落盘回包保留原请求名称；选择会话差异记录、推送摘要并管理原生 diff 审查视图
+ * [INPUT]: 依赖 vscode、node:fs/promises 的本地图片读取和 node:url 的文件 URL 解析，消费 ./changeReview、./sessionChanges、../sessionController、./bridge、../environment、../account、../pairingController（懒引用）
+ * [OUTPUT]: ChatViewProvider；桥接会话/配对/用量刷新，粘贴图落盘回包保留原请求名称，本地图片按 URL 异步恢复预览；选择会话差异记录、推送摘要并管理原生 diff 审查视图
  * [POS]: ui 的聊天视图提供者，extension.ts 注册；与 webview/main.ts 通过 bridge 契约通信
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -9,6 +9,7 @@ import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AttachmentRef, DirEntry, FromWebviewMessage, ToWebviewMessage } from './bridge';
 import type { SessionController } from '../sessionController';
 import type { ZcodeServer } from '../serverManager';
@@ -20,6 +21,7 @@ import type { PairingController } from '../pairingController';
 import { ChangeReview } from './changeReview';
 import type { SessionChanges } from './sessionChanges';
 
+const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024;
 /** 常见扩展名 → MIME（附件内联用） */
 const ATTACH_MIME: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
@@ -54,6 +56,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private host: ChatViewHost;
   private lastAccount: AccountStatus | null = null;
   private changes: ChangeReview | null = null;
+  private previewUrls = new Set<string>();
 
   constructor(host: ChatViewHost) {
     this.host = host;
@@ -78,10 +81,59 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   post(msg: ToWebviewMessage): void {
     void this.view?.webview.postMessage(msg);
+    void this.loadAttachmentPreviews(msg);
     const changes = this.host.sessionChanges;
     if (msg.kind === 'session-snapshot') changes.select(msg.data.session.sessionId, this.host.workspacePath(), msg.data.messages.some(message => message.info.role === 'user'));
     else if (msg.kind === 'session-closed') changes.select(null, this.host.workspacePath());
 
+  }
+
+  /** 仅从宿主已接收的消息部件恢复本地图片，不开放任意路径读取桥接。 */
+  private async loadAttachmentPreviews(msg: ToWebviewMessage): Promise<void> {
+    if (!this.view) return;
+    if (msg.kind === 'session-snapshot') this.previewUrls = new Set();
+    const urls = this.previewUrls;
+    let parts: unknown[] = [];
+    if (msg.kind === 'session-snapshot' || msg.kind === 'messages') {
+      parts = msg.data.messages.flatMap(message => message.parts);
+    } else if (msg.kind === 'session-event') {
+      const event = msg.data;
+      const payload = (event.payload ?? event) as Record<string, unknown>;
+      if (event.type === 'part.upserted') parts = [payload.part ?? event.part];
+      else if (event.type === 'message.upserted') {
+        const message = (payload.message ?? event.message ?? payload) as { parts?: unknown[] };
+        parts = message.parts ?? [];
+      }
+    }
+    const view = this.view;
+    await Promise.all(parts.map(async value => {
+      const part = value as { type?: string; url?: string; mime?: string } | undefined;
+      const url = part?.url;
+      if (part?.type !== 'file' || !url || urls.has(url)) return;
+      urls.add(url);
+      const dataUrl = await this.readImagePreview(url, part.mime);
+      if (!dataUrl) urls.delete(url);
+      else if (this.view === view && this.previewUrls === urls) {
+        void view?.webview.postMessage({ kind: 'attachment-preview', data: { url, dataUrl } });
+      }
+    }));
+  }
+
+  private async readImagePreview(url: string, mime?: string): Promise<string | undefined> {
+    try {
+      const file = url.startsWith('file:') ? fileURLToPath(url) : url;
+      if (!path.isAbsolute(file)) return;
+      // 保护目录不参与自动读取；realpath 同时覆盖符号链接。
+      const resolved = await fs.realpath(file);
+      if (/[\\/]docs[\\/](60-marketing|70-research|99-archive)([\\/]|$)/.test(resolved)) return;
+      const imageMime = ATTACH_MIME[path.extname(resolved).slice(1).toLowerCase()] ?? mime;
+      if (!imageMime?.startsWith('image/')) return;
+      const stat = await fs.stat(resolved);
+      if (!stat.isFile() || stat.size > MAX_ATTACHMENT_SIZE) return;
+      return `data:${imageMime};base64,${(await fs.readFile(resolved)).toString('base64')}`;
+    } catch {
+      return; // 历史附件可能已被删除；消息仍可显示文件名。
+    }
   }
 
   /** webview 就绪后注入引导载荷 */
@@ -142,12 +194,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           for (const uri of picked ?? []) {
             try {
               const stat = await vscode.workspace.fs.stat(uri);
-              if (stat.size > 50 * 1024 * 1024) continue;
+              if (stat.size > MAX_ATTACHMENT_SIZE) continue;
               attachments.push({
                 name: uri.path.split('/').pop() ?? uri.fsPath,
                 path: uri.fsPath,
                 mime: ATTACH_MIME[uri.path.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream',
-                size: stat.size
+                size: stat.size,
+                dataUrl: await this.readImagePreview(uri.fsPath)
               });
             } catch {
               /* 单文件 stat 失败跳过 */
