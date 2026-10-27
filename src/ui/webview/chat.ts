@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费协议/bridge 契约、./events、./queue；委托 ./shell、./changes、./composer、./panels、./menus、./todoPanel、./quotaRings 与 ./render
- * [OUTPUT]: ChatApp 共享状态与桥接入口；按附件 URL 接收预览并回填缩略图；按会话 id 分发 diff 汇总并在切换时清空旧摘要、流式分块 Markdown/工具复用、消息完成边界校准思考用时、首响等待/空态同步、ready 发送和滚动跟随；MCP 清单保留未连接/未知项
+ * [OUTPUT]: ChatApp 共享状态与桥接入口；按附件 URL 接收预览并回填缩略图（输入区图片附件芯片点击开 lightbox）；按会话 id 分发 diff 汇总并在切换时清空旧摘要、流式分块 Markdown/工具复用、消息完成边界校准思考用时、首响等待/空态同步、ready 发送和滚动跟随；MCP 清单保留未连接/未知项
  * [POS]: webview 中枢与各 Host 接口的实现者，持有发送准备会话标识并在首个运行信号清理；布局、输入、模态和菜单分别由子模块负责
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -772,6 +772,11 @@ export class ChatApp {
   /** 附件芯片点击：统一走 lightbox（图片放大预览；无数据时提示） */
   private onAttachmentClick(name: string, url?: string, _isImg?: boolean): void {
     this.panels.openPreview(name, url);
+  }
+
+  /** 输入区图片附件芯片点击：预览数据按文件名已在 previewRegistry（粘贴/选文件两路径都登记），直接开 lightbox */
+  openAttachmentPreview(name: string): void {
+    this.panels.openPreview(name);
   }
 
   /** 回填消息内图片附件的缩略图 src（registry 命中时）——每次渲染后调用 */

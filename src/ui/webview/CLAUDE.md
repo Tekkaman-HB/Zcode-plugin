@@ -7,7 +7,7 @@ main.ts: acquireVsCodeApi 装配与消息监听，挂载 ChatApp
 changes.ts: renderChangeSummary，输入框上方的当前会话文件数/增删行数与查看入口，准备中扫光反馈、手动关闭后在面板存活期间按会话保持收起并恢复输入焦点、无可审查记录时隐藏摘要与入口，部分记录标注范围；二进制不计行数
 chat.ts: pendingSendSessionId 持有发送准备，拒绝/首个模型事件/回合结束清理且切换会话隔离，准备时隐藏欢迎页；按原 URL 接收附件预览并在消息重建后回填缩略图；ChatApp 共享状态与桥接入口，事件适配/交互队列/菜单/输入/模态的 Host 实现；消息 id/parts 归一、快照 diff、分块流式 Markdown/工具指纹复用与滚动跟随；状态/消息/交互变动校准首响等待，完成消息退出流式复用以显示固定思考用时，消息变化同步空态；按会话 id 过滤 diff 迟到消息，切换时清空旧摘要；仅 ready 允许发送
 shell.ts: updateSendStatus 在用户回显前立即显示等待，续接首响并按会话清理；无本地模式状态行，套餐/上下文圆环同排的输入底栏；展示骨架与刷新、变更摘要关闭按钮，服务加载文字扫光、导航/欢迎页/一体式 composer、模型标签、语义权限图标和上下文圆环；renderStatus 更新控件，renderResponseWait 按运行态/服务就绪/未答交互判断首响等待，消息增量仅校准等待占位
-composer.ts: ComposerController 输入层，IME/Enter/Shift+Enter、附件粘贴/移除、@ 文件浏览与 slash 选择、发送/停止、排队展示和按原 URL 回填缩略图（无 URL 的乐观消息按文件名匹配）；状态仍由 ChatApp 持有
+composer.ts: ComposerController 输入层，IME/Enter/Shift+Enter、附件粘贴/移除、图片附件芯片点击/Enter 预览（预览数据按文件名查 previewRegistry，× 删除 stopPropagation 不触发预览）、@ 文件浏览与 slash 选择、发送/停止、排队展示和按原 URL 回填缩略图（无 URL 的乐观消息按文件名匹配）；状态仍由 ChatApp 持有
 panels.ts: PanelsController 模态层，配对启动文字扫光、等待扫码静态提示；按原 URL 查找附件 lightbox 图片，避免同名串图，与手机配对展示；Esc/背景关闭、Tab 焦点约束、触发焦点恢复、配对刷新保留焦点与二维码
 events.ts: session/event 适配，ChatSessionState/MutableSessionMessage/EventHost 与消息 id/工具结果归一；保持 optimistic-user 与权威回显合并
 queue.ts: 权限/问答统一焦点队列，requestId 去重、交互 tab 与草稿保持、一次展示一张与应答推进

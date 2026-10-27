@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ../bridge 的附件/消息契约、./render 的 DOM 工厂、./events 的会话快照、./i18n 和 ./icons
- * [OUTPUT]: 对外提供 ComposerController/ComposerHost，按原 URL 回填消息缩略图，负责输入、附件、引用、斜杠命令、发送/停止和队列展示
+ * [OUTPUT]: 对外提供 ComposerController/ComposerHost，按原 URL 回填消息缩略图，负责输入、附件（图片芯片点击预览走 lightbox）、引用、斜杠命令、发送/停止和队列展示
  * [POS]: webview 输入交互层；ChatApp 是状态唯一持有者，菜单导航委托 MenuController
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -36,6 +36,8 @@ export interface ComposerHost {
   showPopup(anchor: HTMLElement, content: HTMLElement): void;
   hidePopup(): void;
   closePreview(): void;
+  /** 输入区图片附件芯片点击：打开 lightbox 预览（预览数据已在 previewRegistry，按文件名命中） */
+  openAttachmentPreview(name: string): void;
   handleComposerKeydown(e: KeyboardEvent): boolean;
 }
 
@@ -127,15 +129,28 @@ export class ComposerController {
       const preview = isImg && a.dataUrl
         ? h('img', { class: 'attach-thumb', src: a.dataUrl, alt: '' })
         : null;
-      this.host.attachRow.append(h('span', { class: 'attach-chip', title: a.path },
+      const chip = h('span', {
+        class: `attach-chip${isImg ? ' clickable' : ''}`,
+        title: a.path,
+        ...(isImg ? { role: 'button', tabindex: '0' } : {})
+      },
         preview,
         h('span', { class: 'attach-chip-name' }, a.name),
-        h('button', { class: 'attach-chip-x', title: this.host.t('cancel'), onclick: () => {
+        h('button', { class: 'attach-chip-x', title: this.host.t('cancel'), onclick: (e: Event) => {
+          e.stopPropagation(); // × 只删除，不触发芯片预览
           this.host.attachments = this.host.attachments.filter((x) => x !== a);
           this.renderAttachRow();
           this.host.updateSendAffordance();
         } }, iconEl('close'))
-      ));
+      );
+      if (isImg) {
+        // 图片芯片点击预览：粘贴图与选文件两条路径都已把 dataUrl 登记进 previewRegistry（键=文件名）
+        chip.addEventListener('click', () => this.host.openAttachmentPreview(a.name));
+        chip.addEventListener('keydown', (e: KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.host.openAttachmentPreview(a.name); }
+        });
+      }
+      this.host.attachRow.append(chip);
     }
   }
 
