@@ -333,7 +333,8 @@ button:focus-visible, [role="menuitem"]:focus-visible, .ui-choice:focus-visible,
 
 /* ── Codex 插件布局与密度 ── */
 .icon-svg svg { display: block; width: 100%; height: 100%; }
-.attach-chip-x .icon-svg, .todo-panel-close .icon-svg { width: 12px; height: 12px; }
+.attach-chip-x .icon-svg { width: 12px; height: 12px; }
+.todo-panel-close .icon-svg { width: 16px; height: 16px; }
 .todo-dot .icon-svg { width: 11px; height: 11px; }
 button, input, textarea { -webkit-tap-highlight-color: transparent; }
 button:disabled { cursor: default; }
