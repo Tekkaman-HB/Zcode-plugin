@@ -1,6 +1,6 @@
 /**
  * [INPUT]: node:child_process/fs/path/crypto；项目 Git 只用于列出受版本管理约束的路径
- * [OUTPUT]: SnapshotStore、SnapshotEntry、SnapshotDiff；有界并行扫描文件元数据，提供私有 Git 对象库的捕获/合并/差异与文件大小/原始字节读取
+ * [OUTPUT]: SnapshotStore、SnapshotEntry、SnapshotDiff；有界并行扫描元数据，按文件身份/纳秒修改时间复用未变对象，提供私有 Git 对象库捕获/合并/差异与原始字节读取
  * [POS]: ui 的会话快照数据层，无 vscode；不写项目 Git 索引/分支/对象，不执行过滤器或外部 diff
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -15,8 +15,10 @@ export interface SnapshotDiff {
   before: SnapshotEntry | null; after: SnapshotEntry | null;
 }
 export type SnapshotFiles = Record<string, SnapshotEntry>;
+interface CachedFile { stamp: string; entry: SnapshotEntry }
 const MAX_MERGE_BYTES = 8 * 1024 * 1024;
 const CAPTURE_BATCH_SIZE = 64;
+const CACHE_SETTLE_MS = 2000;
 const EXCLUDED = ['docs/60-marketing', 'docs/70-research', 'docs/99-archive'];
 const PATHS = ['.', ...EXCLUDED.map(dir => `:(top,exclude)${dir}/**`)];
 
@@ -45,6 +47,7 @@ async function run(cwd: string, args: string[], input?: string | Buffer, env?: N
 }
 
 export class SnapshotStore {
+  private capturedFiles = new Map<string, CachedFile>();
   constructor(readonly directory: string) {}
   private env(index?: string): NodeJS.ProcessEnv {
     return {
@@ -95,22 +98,36 @@ export class SnapshotStore {
     const workspace = await fs.realpath(directory);
     const root = (await run(workspace, ['rev-parse', '--show-toplevel'])).toString().replace(/\n$/, '');
     const listed = (await run(workspace, ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', ...PATHS])).toString();
-    const files: SnapshotFiles = Object.create(null), regular: { name: string; mode: string; absolute: string }[] = [];
+    const files: SnapshotFiles = Object.create(null), regular: { name: string; mode: string; absolute: string; stamp: string | null }[] = [];
+    const captured = new Map<string, CachedFile>();
+    const stableBefore = BigInt(Date.now() - CACHE_SETTLE_MS) * 1000000n;
     const candidates = [...new Set(listed.split('\0').filter(Boolean))];
     for (let offset = 0; offset < candidates.length; offset += CAPTURE_BATCH_SIZE) {
-      await Promise.all(candidates.slice(offset, offset + CAPTURE_BATCH_SIZE).map(async file => {
-      // Git 列出的相对路径先验证再拼接：拒绝绝对路径与 .. 段，并断言解析结果不逃逸工作区
-      if (path.isAbsolute(file) || file.split('/').includes('..')) return;
-      const absolute = path.resolve(workspace, file);
-      if (absolute !== workspace && !absolute.startsWith(workspace + path.sep)) return;
-      const relative = path.relative(root, absolute);
-      if (EXCLUDED.some(dir => relative === dir || relative.startsWith(dir + '/'))) return;
-      try {
-        const stat = await fs.lstat(absolute);
-        if (stat.isSymbolicLink()) files[file] = { ...await this.blob(Buffer.from(await fs.readlink(absolute))), mode: '120000' };
-        else if (stat.isFile()) regular.push({ name: file, mode: stat.mode & 0o111 ? '100755' : '100644', absolute });
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      const metadata = await Promise.all(candidates.slice(offset, offset + CAPTURE_BATCH_SIZE).map(async file => {
+        // Git 列出的路径先验证再读取：拒绝越界路径与保护目录。
+        if (path.isAbsolute(file) || file.split('/').includes('..')) return;
+        const absolute = path.resolve(workspace, file);
+        if (absolute !== workspace && !absolute.startsWith(workspace + path.sep)) return;
+        const relative = path.relative(root, absolute);
+        if (EXCLUDED.some(dir => relative === dir || relative.startsWith(dir + '/'))) return;
+        try { return { file, absolute, stat: await fs.lstat(absolute, { bigint: true }) }; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
       }));
+      // 保留 Git 列表顺序，避免并发完成顺序把后续文件读取打乱。
+      for (const entry of metadata) {
+        if (!entry) continue;
+        const { file, absolute, stat } = entry;
+        if (stat.isSymbolicLink()) files[file] = { ...await this.blob(Buffer.from(await fs.readlink(absolute))), mode: '120000' };
+        else if (stat.isFile()) {
+          // ctime 可识别大小相同且 mtime 被还原的改写，inode/dev 可识别路径被替换。
+          const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.mode}`;
+          // HFS+ 等秒级时间戳可能吞掉同一时刻的连续改写；近期文件每次重读，不进入缓存。
+          const stable = stat.mtimeNs < stableBefore && stat.ctimeNs < stableBefore;
+          const cached = this.capturedFiles.get(absolute);
+          if (stable && cached?.stamp === stamp) { files[file] = cached.entry; captured.set(absolute, cached); }
+          else regular.push({ name: file, mode: stat.mode & 0o111n ? '100755' : '100644', absolute, stamp: stable ? stamp : null });
+        }
+      }
     }
     if (regular.length) {
       // Git 的 C 风格引号保留中文，转义换行/制表符文件名；不经过 shell。
@@ -118,9 +135,15 @@ export class SnapshotStore {
       const input = regular.map(file => quote(file.absolute)).join('\n') + '\n';
       const hashes = (await this.git(['hash-object', '--no-filters', '-w', '--stdin-paths'], input, workspace)).toString().trim().split('\n');
       if (hashes.length !== regular.length) throw new Error('Incomplete snapshot');
-      regular.forEach((file, i) => { files[file.name] = { hash: hashes[i], mode: file.mode }; });
+      regular.forEach((file, i) => {
+        const entry = { hash: hashes[i], mode: file.mode };
+        files[file.name] = entry;
+        if (file.stamp !== null) captured.set(file.absolute, { stamp: file.stamp, entry });
+      });
     }
-    return this.tree(files);
+    const tree = await this.tree(files);
+    this.capturedFiles = captured;
+    return tree;
   }
   async diff(before: SnapshotFiles, after: SnapshotFiles): Promise<SnapshotDiff[]> {
     const base = await this.tree(before), result = await this.tree(after);

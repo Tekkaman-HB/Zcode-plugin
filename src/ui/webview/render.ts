@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 ../../protocol/types、./markdown、./format、./i18n、./icons 与 ./clipboard；流式活性由 chat.ts 传入
- * [OUTPUT]: DOM/消息/部件/diff 渲染器（附件携原 URL 等待预览，失效缩略图隐藏）、processingLabel、updateStreamingText 与 renderPendingResponse；纯工具消息紧凑排列，过滤空文本/回合边界；思考落档显示服务端固定用时，工具图标按 Codex 语义分流
+ * [OUTPUT]: DOM/消息/部件/diff 渲染器（附件携原 URL 等待预览，失效缩略图隐藏）、processingLabel、updateStreamingText 与 renderPendingResponse（支持用户回显前的发送准备）；纯工具消息紧凑排列，过滤空文本/回合边界；思考落档显示服务端固定用时，工具图标按 Codex 语义分流
  * [POS]: webview 渲染层；保存工具展开与流式尾块缓存，chat.ts 持有会话状态；交互卡片见 ./interaction
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -121,14 +121,14 @@ function thinkingPlaceholder(t: Translate, label = t('thinking')): HTMLElement {
 }
 
 /** 首个模型事件到达前的展示占位，不写入会话消息，避免伪造助手 id 或与权威回显重复。 */
-export function renderPendingResponse(container: HTMLElement, t: Translate, active: boolean): boolean {
+export function renderPendingResponse(container: HTMLElement, t: Translate, active: boolean, preparing = false): boolean {
   const existing = container.querySelector('.response-pending');
   if (!active) { existing?.remove(); return false; }
   let last = container.lastElementChild as HTMLElement | null;
   while (last && (!last.hasAttribute('data-message-id') || !last.textContent?.trim())) {
     last = last.previousElementSibling as HTMLElement | null;
   }
-  if (!last?.classList.contains('msg-user')) {
+  if (!preparing && !last?.classList.contains('msg-user')) {
     existing?.remove();
     return false;
   }

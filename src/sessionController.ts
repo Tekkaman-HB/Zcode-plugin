@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 ./serverManager 的 ZcodeServer、./protocol/types、./ui/bridge 的消息契约、./remote 的 RelayTaskTarget 类型
  * [OUTPUT]: 对外提供 SessionController（会话生命周期 + 事件流转发 + 反向请求转 UI；onBeforeSend 等待实际发送基线、onSendRejected 撤销基线、onSessionEvent 在当前会话 UI 过滤前提供实时事件；currentModelProvider getter=当前会话模型 providerId，create/resume/setModel 三路维护——套餐额度查询跟随其 key）；排队队列（入队/删除/插队快发：stop 后 100ms 短窗 drain，800ms 去抖仅作回合自然结束的兜底）；onModeChange 模式落定回调（新建/恢复/用户切换/CLI 改模式）；setMode 受理后主动回推 webview state-updated patch（模式芯片即时归位，不依赖 CLI 广播）；交互生命周期留痕（onInteractionLog → serverManager OutputChannel）与失效自卫（dropPendingInteractions 撤回时回发 interactions-dropped 清 webview 交互卡；对已失效请求的应答显式回执 error 提示而非静默吞掉）；手机端任务快照（mobileTasks 缓存 + refreshMobileTaskSnapshot 翻译 session/list、busy 会话标 running——回合结束/新建会话时刷新，onSnapshotChanged 通知宿主推手机）
- * [OUTPUT]: fetchMcpServers 合并配置名称与实时进程，补齐未连接项、按原始服务 id 去重；HTTP 状态保留未知
+ * [OUTPUT]: fetchMcpServers 合并配置名称与实时进程，补齐未连接项、按原始服务 id 去重；HTTP 状态保留未知；send-status 在等待基线前通知准备，发送拒绝或会话失效时撤销
  * [POS]: 会话控制层——extension.ts 与 UI Provider 之间的业务中枢
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -363,9 +363,14 @@ export class SessionController {
     if (!sessionId) return;
     this.busy = true;
     this.busySince = Date.now();
+    this.cbs.toWebview({ kind: 'send-status', data: { sessionId, phase: 'preparing' } });
     try {
       await this.cbs.onBeforeSend?.(sessionId);
-      if (sessionId !== this.currentSessionId) { this.cbs.onSendRejected?.(sessionId); return; }
+      if (sessionId !== this.currentSessionId) {
+        this.cbs.onSendRejected?.(sessionId);
+        this.cbs.toWebview({ kind: 'send-status', data: { sessionId, phase: 'rejected' } });
+        return;
+      }
       await this.server.request('session/send', {
         sessionId,
         content,
@@ -393,6 +398,7 @@ export class SessionController {
       });
     } catch (e) {
       this.cbs.onSendRejected?.(sessionId);
+      this.cbs.toWebview({ kind: 'send-status', data: { sessionId, phase: 'rejected' } });
       // -32010（回合运行中）：busy 标志与服务器实际状态失步（事件错过）时的自愈——转排队而非报错
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('-32010') || /already running/i.test(msg)) {

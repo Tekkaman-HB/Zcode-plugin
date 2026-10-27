@@ -1,10 +1,36 @@
 /**
  * [INPUT]: theme-check 提供的真实 bundle 页面、加载器和检查器，Playwright clock 控制工具/推理刷新时序
- * [OUTPUT]: loadingChecks，处理中文字扫光/无旋转和秒表/刷新续播、思考结束固定用时/历史恢复/同色弱化与主题无障碍检查
+ * [OUTPUT]: loadingChecks，发送准备即时反馈/拒绝与会话切换清理、处理中文字扫光/无旋转和秒表/刷新续播、思考结束固定用时/历史恢复/同色弱化与主题无障碍检查
  * [POS]: scripts/ 的处理状态回归模块，由 theme-check.mjs 调用，不启动 CLI 或请求模型
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 export async function loadingChecks(page, load, check) {
+  await check('发送准备阶段下一帧显示等待，不伪造消息；受理后续接首响，拒绝/切换清理且旧会话不串入', async () => {
+    await load('&scene=empty');
+    await page.evaluate(() => window.__fixture.post({ kind: 'send-status', data: { sessionId: 's1', phase: 'preparing' } }));
+    await page.waitForSelector('.response-pending');
+    if (await page.locator('[data-message-id]').count()) return false;
+    await page.evaluate(() => {
+      window.__pendingBeforeSend = document.querySelector('.response-pending');
+      window.__fixture.post({ kind: 'optimistic-user', data: { id: 'local-send', text: '发送测试' } });
+      window.__fixture.status('running');
+    });
+    await page.waitForSelector('[data-message-id="local-send"]');
+    if (!await page.evaluate(() => document.querySelector('.response-pending') === window.__pendingBeforeSend)) return false;
+    await load('&scene=empty');
+    for (const phase of ['preparing', 'rejected']) {
+      await page.evaluate(phase => window.__fixture.post({ kind: 'send-status', data: { sessionId: 's1', phase } }), phase);
+      await page.waitForSelector('.response-pending', { state: phase === 'preparing' ? 'attached' : 'detached' });
+    }
+    await page.evaluate(() => {
+      const f = window.__fixture;
+      f.post({ kind: 'send-status', data: { sessionId: 's1', phase: 'preparing' } });
+      f.snapshot('empty', 's2');
+      f.post({ kind: 'send-status', data: { sessionId: 's1', phase: 'preparing' } });
+    });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    return !await page.locator('.response-pending').count();
+  });
   await check('思考结束显示真实用时，历史恢复保持一致，缺失或无效时间不伪造数字', async () => {
     await load('&scene=empty');
     const render = async time => {
@@ -134,7 +160,7 @@ export async function loadingChecks(page, load, check) {
         } }), i);
         await p.clock.runFor(400);
       }
-      return p.evaluate(() => {
+      return await p.evaluate(() => {
         const label = document.querySelector('.reasoning-live .processing');
         const delay = parseFloat(label?.style.animationDelay ?? '0');
         return label?.textContent === '正在思考' && delay < -5000 && Math.abs(delay + performance.now()) < 500

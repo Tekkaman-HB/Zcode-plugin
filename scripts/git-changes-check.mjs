@@ -86,6 +86,41 @@ try {
       assert.deepEqual(await contents(await s.review()), ['before\n', 'after\n']);
     } finally { fs.default.lstat = lstat; syncBuiltinESMExports(); s.dispose(); }
   });
+  await test('未变化文件复用快照对象，同大小且还原 mtime 的修改仍重新捕获，删除后不复用旧内容', async () => {
+    const { workspace: w, sessions: s } = await fixture();
+    await save(w, 'file', 'before\n');
+    // 推进逻辑时钟，让初始文件越过快照缓存的安全窗口。
+    const now = Date.now; Date.now = () => now() + 3000;
+    await s.beginTurn('s1', w);
+    const store = [...s.stores.values()][0], git = store.git.bind(store);
+    let hashed = 0;
+    store.git = (...args) => { if (args[0].includes('--stdin-paths')) hashed++; return git(...args); };
+    try {
+      await store.capture(w); assert.equal(hashed, 0, '未变化的文件仍被重新读取并哈希');
+      const original = await fs.stat(path.join(w, 'file'));
+      await save(w, 'file', 'change\n'); await fs.utimes(path.join(w, 'file'), original.atime, original.mtime);
+      let files = await store.files(await store.capture(w));
+      assert.equal(hashed, 1); assert.equal((await store.content(files.file)).toString(), 'change\n');
+      await fs.unlink(path.join(w, 'file')); files = await store.files(await store.capture(w)); assert.ok(!files.file);
+      await save(w, 'file', 'reborn\n'); files = await store.files(await store.capture(w));
+      assert.equal(hashed, 2); assert.equal((await store.content(files.file)).toString(), 'reborn\n');
+    } finally { Date.now = now; s.dispose(); }
+  });
+  await test('秒级时间戳文件系统的连续同大小改写不会被快照缓存吞掉', async () => {
+    const { workspace: w, sessions: s } = await fixture(); await save(w, 'file', 'before\n');
+    const lstat = fs.default.lstat, tick = BigInt(Math.floor(Date.now() / 1000)) * 1000000000n;
+    fs.default.lstat = async (...args) => {
+      const stat = await lstat(...args);
+      if (args[0] === path.join(w, 'file') && args[1]?.bigint) { stat.mtimeNs = tick; stat.ctimeNs = tick; }
+      return stat;
+    };
+    syncBuiltinESMExports();
+    try {
+      await s.beginTurn('s1', w); await save(w, 'file', 'change\n'); await s.checkpoint('s1', w, true);
+      const review = await s.review(); assert.equal(review.files.length, 1);
+      assert.deepEqual(await contents(review), ['before\n', 'change\n']);
+    } finally { fs.default.lstat = lstat; syncBuiltinESMExports(); s.dispose(); }
+  });
   await test('会话基线包含原有暂存/未暂存/新增内容，只统计本轮增量', async () => {
     const { workspace: w, sessions: s } = await fixture();
     await save(w, 'file', 'HEAD\n'); commit(w);
@@ -318,6 +353,28 @@ try {
       await review.review(); const [command, title, files] = testState.commands.at(-1);
       assert.equal(command, 'vscode.changes'); assert.ok(title.includes('ZCode')); assert.equal(files.length, 2);
     } finally { review.dispose(); s.dispose(); }
+  });
+  await test('发送开始即反馈准备状态，仍等待基线，失败和切换会话时撤销等待', async () => {
+    const messages = []; let release, fail = false;
+    const ctl = new SessionController({ dispose() {}, async request() {
+      if (fail) throw new Error('send failed');
+      return { accepted: true };
+    } }, { toWebview: msg => messages.push(msg), onBeforeSend: () => new Promise(resolve => { release = resolve; }) });
+    ctl.currentSessionId = 's1';
+    try {
+      const pending = ctl.send('first');
+      assert.equal(messages[0]?.kind, 'send-status');
+      assert.deepEqual(messages[0]?.data, { sessionId: 's1', phase: 'preparing' });
+      assert.ok(!messages.some(msg => msg.kind === 'optimistic-user'));
+      release(); await pending;
+      ctl.handleNotification('session/event', { type: 'turn.completed', sessionId: 's1', payload: {} });
+      fail = true;
+      const rejected = assert.rejects(ctl.send('second'), /send failed/); release(); await rejected;
+      assert.deepEqual(messages.at(-1).data, { sessionId: 's1', phase: 'rejected' });
+      fail = false;
+      const stale = ctl.send('stale'); ctl.currentSessionId = 's2'; release(); await stale;
+      assert.deepEqual(messages.at(-1).data, { sessionId: 's1', phase: 'rejected' });
+    } finally { release?.(); ctl.dispose(); }
   });
   await test('真实发送和队列出队均等待各自基线，切换会话不会发到错误会话', async () => {
     const order = [], gates = []; let sid = 0;

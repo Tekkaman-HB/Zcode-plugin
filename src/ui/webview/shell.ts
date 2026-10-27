@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ./render、./icons、./i18n、./events 的展示类型与 ./format 的用量格式化与 reasoningChoices 三档映射
- * [OUTPUT]: createChatShell（含底部差异容器与关闭按钮、套餐与上下文圆环同排，无本地模式状态行）、renderWelcome（加载文字扫光）、renderHeaderControls、renderContextRing、renderStatus/renderResponseWait
+ * [OUTPUT]: createChatShell（含差异容器与关闭按钮、套餐与上下文圆环同排）、renderWelcome、renderHeaderControls、renderContextRing、renderStatus/renderResponseWait/updateSendStatus；发送准备即时反馈并续接首响等待
  * [POS]: webview 的布局层；chat.ts 持有状态，composer.ts 绑定输入行为
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -49,15 +49,25 @@ export function renderHeaderControls(host: {
 
 interface ResponseWaitHost {
   messagesEl: HTMLElement; t: Translate; session: ChatSessionState | null; serverState: string;
+  pendingSendSessionId: string | null;
   pendingPermissions: { size: number }; pendingUserInputs: { size: number };
   scrollBottom(): void;
 }
 
 /** 消息刷新只校准首响占位，不重复构建发送按钮和上下文圆环。 */
 export function renderResponseWait(host: ResponseWaitHost): void {
-  const waiting = host.session?.projection.status === 'running' && host.serverState === 'ready'
+  if (host.pendingSendSessionId !== host.session?.info.sessionId) host.pendingSendSessionId = null;
+  const preparing = host.pendingSendSessionId !== null;
+  const waiting = (preparing || host.session?.projection.status === 'running') && host.serverState === 'ready'
     && !host.pendingPermissions.size && !host.pendingUserInputs.size;
-  if (renderPendingResponse(host.messagesEl, host.t, waiting)) host.scrollBottom();
+  if (renderPendingResponse(host.messagesEl, host.t, waiting, preparing)) host.scrollBottom();
+}
+
+/** 准备阶段只展示等待状态；用户消息仍由 CLI 受理后的统一通道写入。 */
+export function updateSendStatus(host: ResponseWaitHost, data: { sessionId: string; phase: 'preparing' | 'rejected' }): void {
+  if (data.sessionId !== host.session?.info.sessionId) return;
+  host.pendingSendSessionId = data.phase === 'preparing' ? data.sessionId : null;
+  renderResponseWait(host);
 }
 
 /** 状态变化时更新控件，并校准首响前的等待反馈。 */

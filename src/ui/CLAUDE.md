@@ -3,8 +3,8 @@
 
 ## 成员清单
 
-bridge.ts: attachment-preview 以原 URL 回填本地图片数据；扩展↔webview 纯类型消息契约（McpServerEntry：可选 pid，connected true/false/null 区分连接/未连接/未知）（SessionChangesPayload/session-changes/review-changes；携带会话 id、ready/missing/partial/error 完整性状态和 preparing 暂态；interactions-dropped 清交互卡）
-gitChanges.ts: SnapshotStore 私有 Git 对象库；原项目只读列路径，私有独立索引/对象捕获文件、计算差异和三方合并、读取原始字节/大小，排除保护目录/gitignore，无过滤器/外部 diff，不写项目 Git
+bridge.ts: send-status 按会话传递准备/拒绝状态；attachment-preview 以原 URL 回填本地图片数据；扩展↔webview 纯类型消息契约（McpServerEntry：可选 pid，connected true/false/null 区分连接/未连接/未知）（SessionChangesPayload/session-changes/review-changes；携带会话 id、ready/missing/partial/error 完整性状态和 preparing 暂态；interactions-dropped 清交互卡）
+gitChanges.ts: SnapshotStore 私有 Git 对象库；64 文件有界并行元数据扫描，按 dev/inode/size/mtimeNs/ctimeNs/mode 复用未变对象，2 秒内新改文件重读以兼容 HFS+ 秒级时间戳；原项目只读列路径，私有独立索引/对象捕获文件、计算差异和三方合并、读取原始字节/大小，排除保护目录/gitignore，无过滤器/外部 diff，不写项目 Git
 sessionChanges.ts: SessionChanges 会话差异唯一状态源；按工作区+会话持久化，实际发送前基线/工具检查点/实时结束事件归属，中间检查点落盘供中断恢复；多轮合并，外部保存/重叠/冲突/断档标部分或不可用，旧会话不回退 HEAD
 changeReview.ts: 原生多文件 diff 展示适配；订阅 SessionChanges 推送摘要，vscode.changes 一次打开当前会话全部文件；随侧栏释放订阅
 snapshotDocuments.ts: 扩展生命周期的只读 FileSystemProvider；工作区键/blob URI 从私有对象库读取文本或二进制，侧栏释放/重新注册后仍可恢复，缺失资源显式报错

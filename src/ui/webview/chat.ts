@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 消费协议/bridge 契约、./events、./queue；委托 ./shell、./changes、./composer、./panels、./menus、./todoPanel、./quotaRings 与 ./render
  * [OUTPUT]: ChatApp 共享状态与桥接入口；按附件 URL 接收预览并回填缩略图；按会话 id 分发 diff 汇总并在切换时清空旧摘要、流式分块 Markdown/工具复用、消息完成边界校准思考用时、首响等待/空态同步、ready 发送和滚动跟随；MCP 清单保留未连接/未知项
- * [POS]: webview 中枢与各 Host 接口的实现者；布局、输入、模态和菜单分别由子模块负责
+ * [POS]: webview 中枢与各 Host 接口的实现者，持有发送准备会话标识并在首个运行信号清理；布局、输入、模态和菜单分别由子模块负责
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type {
@@ -16,7 +16,7 @@ import { h, renderMessage, resetToolCollapseState, isSystemReminderText, updateS
 import type { InteractionDraft } from './interaction';
 import { makeT, type Locale, type Translate } from './i18n';
 import { iconEl } from './icons';
-import { createChatShell, renderWelcome, renderContextRing as renderContextRingDom, renderHeaderControls as renderHeaderControlsDom, renderStatus as renderStatusDom, renderResponseWait } from './shell';
+import { createChatShell, renderWelcome, renderContextRing as renderContextRingDom, renderHeaderControls as renderHeaderControlsDom, renderStatus as renderStatusDom, renderResponseWait, updateSendStatus } from './shell';
 import { ComposerController } from './composer';
 import { PanelsController } from './panels';
 import { renderChangeSummary } from './changes';
@@ -29,6 +29,7 @@ export class ChatApp {
   // ═══════════ 子模块宿主面（public：./events ./queue ./menus 经 Host 接口访问） ═══════════
   t: Translate;
   locale: Locale = 'en-US';
+  pendingSendSessionId: string | null = null;
   environmentOk = true;
   environmentDetail: string | undefined;
   account: BootstrapPayload['account'] = null;
@@ -197,6 +198,7 @@ export class ChatApp {
   onMessage(msg: ToWebviewMessage): void {
     if (msg.kind === 'session-snapshot' || msg.kind === 'session-closed') renderChangeSummary(this.root, { sessionId: '', status: 'ready', files: 0, added: 0, deleted: 0, binary: 0 }, this.t);
     switch (msg.kind) {
+      case 'send-status': updateSendStatus(this, msg.data); this.renderOverlay(); break;
       case 'session-changes': if (msg.data.sessionId === this.session?.info.sessionId) renderChangeSummary(this.root, msg.data, this.t); break;
       case 'bootstrap':
         this.locale = msg.data.locale;
@@ -278,11 +280,11 @@ export class ChatApp {
         this.renderOverlay();
         break;
       case 'session-event': {
-        // 回合 status 走 session.updated 投影通道（state.updated 不带）——status/后台任务真正变化时
-        // 同步发送按钮供能与圆环（流式 delta 高频，不能无条件刷）；state-updated 路径由 renderStatus 覆盖
+        // status/后台任务真正变化时同步控件，流式 delta 不重复刷圆环；state-updated 由 renderStatus 覆盖。
         const prevStatus = this.session?.projection.status;
         const prevJobs = this.session?.projection.backgroundJobs?.length ?? 0;
         applySessionEvent(this, msg.data);
+        if (['model.streaming', 'turn.completed', 'turn.failed'].includes(msg.data.type)) this.pendingSendSessionId = null;
         if (this.session && (this.session.projection.status !== prevStatus
           || (this.session.projection.backgroundJobs?.length ?? 0) !== prevJobs)) {
           this.renderStatus();
@@ -685,7 +687,7 @@ export class ChatApp {
 
   private renderOverlay(): void {
     const loginRequired = Boolean(this.account && !this.account.loggedIn);
-    const visible = this.environmentOk && (loginRequired || this.messages.size === 0);
+    const visible = this.environmentOk && (loginRequired || (this.messages.size === 0 && this.pendingSendSessionId !== this.session?.info.sessionId));
     this.overlayEl.classList.toggle('visible', visible);
     this.messagesEl.style.display = visible ? 'none' : '';
     this.composerInput.placeholder = this.t(this.messages.size ? 'followupPlaceholder' : 'inputPlaceholder');
