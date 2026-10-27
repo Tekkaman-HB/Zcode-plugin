@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ./render、./icons、./i18n、./events 的展示类型与 ./format 的用量格式化与 reasoningChoices 三档映射
- * [OUTPUT]: createChatShell（含底部差异容器、套餐与上下文圆环同排，无本地模式状态行）、renderWelcome（加载文字扫光）、renderHeaderControls、renderContextRing、renderStatus/renderResponseWait
+ * [OUTPUT]: createChatShell（含底部差异容器与关闭按钮、套餐与上下文圆环同排，无本地模式状态行）、renderWelcome（加载文字扫光）、renderHeaderControls、renderContextRing、renderStatus/renderResponseWait
  * [POS]: webview 的布局层；chat.ts 持有状态，composer.ts 绑定输入行为
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -115,7 +115,10 @@ export function createChatShell(t: Translate, a: ShellActions, quota: HTMLElemen
     h('div', { class: 'composer-context' },
       h('div', { class: 'changes-summary hidden', role: 'group' },
         h('div', { class: 'changes-stats' }),
-        h('button', { type: 'button', class: 'changes-review', 'data-text': 'viewChanges', 'data-label': 'viewChanges', onclick: a.review }, t('viewChanges')))),
+        h('div', { class: 'changes-actions' },
+          h('button', { type: 'button', class: 'changes-review', 'data-text': 'viewChanges', 'data-label': 'viewChanges', onclick: a.review }, t('viewChanges')),
+          h('button', { type: 'button', class: 'bar-icon-btn changes-dismiss', title: t('dismissChanges'),
+            'aria-label': t('dismissChanges'), 'data-label': 'dismissChanges' }, iconEl('close'))))),
     h('div', { class: 'composer-surface' },
       h('div', { class: 'composer-inner' }, attachRow, composerInput),
       h('div', { class: 'composer-bar' },

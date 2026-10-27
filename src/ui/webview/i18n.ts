@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无依赖
- * [OUTPUT]: makeT、Locale、Translate 与 WvStringKey，覆盖 MCP 连接/未连接/未知及处理/思考/加载状态与底部会话差异与缺失/部分记录提示/导航/输入/菜单/首响等待/工具活动/复制/交互卡的中英文文案
+ * [OUTPUT]: makeT、Locale、Translate 与 WvStringKey，覆盖 MCP 连接/未连接/未知及处理/思考/加载状态与底部会话差异与关闭摘要/缺失/部分记录提示/导航/输入/菜单/首响等待/工具活动/复制/交互卡的中英文文案
  * [POS]: webview 的 i18n 层，bootstrap 载荷带来的 locale 决定语言
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -17,6 +17,7 @@ const strings = {
     composer: '消息输入',
     filesChanged: '{count} 个文件已更改',
     viewChanges: '查看变更',
+    dismissChanges: '关闭变更摘要',
     sessionChanges: '当前 ZCode 会话的已记录改动（执行前 → 执行后快照）',
     sessionChangesBinary: '当前会话的已记录改动（包含二进制文件；行数仅统计文本文件）',
     sessionChangesPreparing: '正在准备…',
@@ -165,6 +166,7 @@ const strings = {
     composer: 'Message input',
     filesChanged: '{count} files changed',
     viewChanges: 'Review changes',
+    dismissChanges: 'Dismiss change summary',
     sessionChanges: 'Recorded changes from the current ZCode session (before → after snapshots)',
     sessionChangesBinary: 'Recorded session changes (includes binary files; line counts cover text files only)',
     sessionChangesPreparing: 'Preparing…',

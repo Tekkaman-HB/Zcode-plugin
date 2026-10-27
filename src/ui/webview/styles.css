@@ -1,6 +1,6 @@
 /**
  * [INPUT]: ./tokens.css、./content.css 与 shell/composer/menus/panels 的 DOM
- * [OUTPUT]: 导航、一体式输入区（16px 语义权限图标）、20px 整行居中的权限菜单、欢迎页与响应式布局，思考强度横排三档、模型上下文列对齐，底栏套餐与上下文圆环同排居中；MCP 连接绿灯/未连接红灯/未知灰灯；统一处理中文字扫光，减少动态效果/强制颜色模式下静态可读
+ * [OUTPUT]: 导航、一体式输入区（16px 语义权限图标）、20px 整行居中的权限菜单、欢迎页与响应式布局，思考强度横排三档、模型上下文列对齐，底栏套餐与上下文圆环同排居中，变更摘要查看/关闭操作成组布局；MCP 连接绿灯/未连接红灯/未知灰灯；统一处理中文字扫光，减少动态效果/强制颜色模式下静态可读
  * [POS]: webview 样式入口；主题令牌在 tokens.css，消息与交互组件在 content.css
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -99,6 +99,8 @@ button:focus-visible, [role="menuitem"]:focus-visible, .ui-choice:focus-visible,
 .composer-context.has-changes { margin: 0 10px -18px; padding: 6px 6px 18px; border: 1px solid var(--line); border-radius: 20px 20px 0 0; }
 .changes-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; padding: 0 6px 8px; min-width: 0; color: var(--ink-3); font-size: 12px; }
 .changes-stats { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; font-variant-numeric: tabular-nums; }
+.changes-actions { display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
+.changes-dismiss:active { background: var(--hover); }
 .changes-added { color: var(--green); }
 .changes-deleted { color: var(--red); }
 .changes-review { flex: none; min-height: 28px; padding: 4px 0; border: none; border-radius: 4px; background: transparent; color: var(--ink-3); font: inherit; cursor: pointer; }

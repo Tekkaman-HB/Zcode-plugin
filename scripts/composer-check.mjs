@@ -1,7 +1,7 @@
 /**
  * [INPUT]: esbuild、临时文件系统、真实 ChatViewProvider 与 theme-check 浏览器/fixture 消息桥
- * [OUTPUT]: composerChecks，验证中英文粘贴图片经宿主落盘后恢复发送，保留缩略图与真实文件路径；验证停止/完成回合后的 artifact 持久图片、历史恢复/实时回流/同名附件与文件选择的真实图片预览
- * [POS]: scripts/ 的附件链路回归；连接真实宿主处理器和 webview，隔离临时目录，无 CLI/模型请求
+ * [OUTPUT]: composerChecks，验证摘要关闭/焦点恢复/会话隔离/刷新保持与四主题窄栏；验证中英文粘贴图片经宿主落盘后恢复发送，保留缩略图与真实文件路径；验证停止/完成回合后的 artifact 持久图片、历史恢复/实时回流/同名附件与文件选择的真实图片预览
+ * [POS]: scripts/ 的输入区摘要与附件链路回归；连接真实宿主处理器和 webview，隔离临时目录，无 CLI/模型请求
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { build } from 'esbuild';
@@ -24,6 +24,60 @@ export async function composerChecks(sourcePage, check) {
     await page.waitForSelector('.model-label');
   };
   try {
+    await check('变更摘要可点击/键盘关闭并恢复输入焦点，刷新和切回保持关闭，其他会话独立', async () => {
+      for (const locale of ['zh-CN', 'en-US']) {
+        await load('&locale=' + locale);
+        const publish = sessionId => page.evaluate(sessionId => window.__fixture.post({ kind: 'session-changes',
+          data: { sessionId, status: 'ready', files: 2, added: 15, deleted: 3, binary: 0 } }), sessionId);
+        await publish('s1');
+        const dismiss = page.getByRole('button', { name: locale === 'zh-CN' ? '关闭变更摘要' : 'Dismiss change summary' });
+        await dismiss.waitFor();
+        if (locale === 'zh-CN') await dismiss.click();
+        else { await dismiss.focus(); await page.keyboard.press('Enter'); }
+        if (await page.locator('.changes-summary').isVisible()
+          || await page.locator('.composer-context.has-changes').count()
+          || !await page.locator('.composer-input').evaluate(el => el === document.activeElement)) return false;
+        await publish('s1');
+        await page.evaluate(() => window.__fixture.snapshot('empty', 's1'));
+        await publish('s1');
+        if (await page.locator('.changes-summary').isVisible()) return false;
+        await page.evaluate(() => window.__fixture.snapshot('empty', 's2'));
+        await publish('s2');
+        await page.waitForSelector('.changes-summary:visible');
+        await page.evaluate(() => window.__fixture.snapshot('empty', 's1'));
+        await publish('s1');
+        if (await page.locator('.changes-summary').isVisible()) return false;
+      }
+      return true;
+    });
+    await check('准备中的变更摘要也可关闭，后续完成消息保持收起', async () => {
+      await load();
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes',
+        data: { sessionId: 's1', status: 'preparing', files: 0, added: 0, deleted: 0, binary: 0 } }));
+      await page.locator('.changes-dismiss').click();
+      await page.evaluate(() => window.__fixture.post({ kind: 'session-changes',
+        data: { sessionId: 's1', status: 'ready', files: 1, added: 4, deleted: 1, binary: 0 } }));
+      return !await page.locator('.changes-summary').isVisible()
+        && !await page.locator('.composer-context.has-changes').count();
+    });
+    await check('摘要关闭按钮在四主题/280px 窄栏内可见、可聚焦且无遮挡', async () => {
+      await page.setViewportSize({ width: 280, height: 900 });
+      for (const theme of ['dark', 'light', 'hc', 'hclight']) {
+        await load('&theme=' + theme);
+        await page.evaluate(() => window.__fixture.post({ kind: 'session-changes',
+          data: { sessionId: 's1', status: 'partial', files: 123, added: 123456, deleted: 98765, binary: 1 } }));
+        await page.locator('.changes-dismiss').focus();
+        const valid = await page.locator('.changes-dismiss').evaluate(el => {
+          const r = el.getBoundingClientRect(), style = getComputedStyle(el);
+          return document.documentElement.scrollWidth <= innerWidth && r.right <= innerWidth
+            && el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
+            && el === document.activeElement && style.outlineStyle !== 'none';
+        });
+        if (!valid) return false;
+      }
+      await page.setViewportSize({ width: 460, height: 900 });
+      return true;
+    });
     const output = path.join(temp, 'provider.mjs');
     await build({ entryPoints: ['src/ui/chatProvider.ts'], bundle: true, platform: 'node', format: 'esm', outfile: output,
       plugins: [{ name: 'host-double', setup(build) {
