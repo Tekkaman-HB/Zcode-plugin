@@ -1,6 +1,6 @@
 /**
  * [INPUT]: node:child_process/fs/path/crypto；项目 Git 只用于列出受版本管理约束的路径
- * [OUTPUT]: SnapshotStore、SnapshotEntry、SnapshotDiff；扩展私有 Git 对象库的捕获/合并/差异与文件大小/原始字节读取
+ * [OUTPUT]: SnapshotStore、SnapshotEntry、SnapshotDiff；有界并行扫描文件元数据，提供私有 Git 对象库的捕获/合并/差异与文件大小/原始字节读取
  * [POS]: ui 的会话快照数据层，无 vscode；不写项目 Git 索引/分支/对象，不执行过滤器或外部 diff
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -16,6 +16,7 @@ export interface SnapshotDiff {
 }
 export type SnapshotFiles = Record<string, SnapshotEntry>;
 const MAX_MERGE_BYTES = 8 * 1024 * 1024;
+const CAPTURE_BATCH_SIZE = 64;
 const EXCLUDED = ['docs/60-marketing', 'docs/70-research', 'docs/99-archive'];
 const PATHS = ['.', ...EXCLUDED.map(dir => `:(top,exclude)${dir}/**`)];
 
@@ -95,18 +96,21 @@ export class SnapshotStore {
     const root = (await run(workspace, ['rev-parse', '--show-toplevel'])).toString().replace(/\n$/, '');
     const listed = (await run(workspace, ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', ...PATHS])).toString();
     const files: SnapshotFiles = Object.create(null), regular: { name: string; mode: string; absolute: string }[] = [];
-    for (const file of new Set(listed.split('\0').filter(Boolean))) {
+    const candidates = [...new Set(listed.split('\0').filter(Boolean))];
+    for (let offset = 0; offset < candidates.length; offset += CAPTURE_BATCH_SIZE) {
+      await Promise.all(candidates.slice(offset, offset + CAPTURE_BATCH_SIZE).map(async file => {
       // Git 列出的相对路径先验证再拼接：拒绝绝对路径与 .. 段，并断言解析结果不逃逸工作区
-      if (path.isAbsolute(file) || file.split('/').includes('..')) continue;
+      if (path.isAbsolute(file) || file.split('/').includes('..')) return;
       const absolute = path.resolve(workspace, file);
-      if (absolute !== workspace && !absolute.startsWith(workspace + path.sep)) continue;
+      if (absolute !== workspace && !absolute.startsWith(workspace + path.sep)) return;
       const relative = path.relative(root, absolute);
-      if (EXCLUDED.some(dir => relative === dir || relative.startsWith(dir + '/'))) continue;
+      if (EXCLUDED.some(dir => relative === dir || relative.startsWith(dir + '/'))) return;
       try {
         const stat = await fs.lstat(absolute);
         if (stat.isSymbolicLink()) files[file] = { ...await this.blob(Buffer.from(await fs.readlink(absolute))), mode: '120000' };
         else if (stat.isFile()) regular.push({ name: file, mode: stat.mode & 0o111 ? '100755' : '100644', absolute });
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      }));
     }
     if (regular.length) {
       // Git 的 C 风格引号保留中文，转义换行/制表符文件名；不经过 shell。

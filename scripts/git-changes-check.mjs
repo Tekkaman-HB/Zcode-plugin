@@ -1,6 +1,6 @@
 /**
- * [INPUT]: node:test/assert/fs/os/child_process、esbuild 与真实 Git；消费 sessionChanges/gitChanges/宿主/控制器
- * [OUTPUT]: 临时仓库会话归属回归，覆盖多轮/隔离/检查点中断恢复/外部编辑/冲突/只读快照与真实发送边界
+ * [INPUT]: node:test/assert/fs/os/child_process/module、esbuild 与真实 Git；消费 sessionChanges/gitChanges/宿主/控制器
+ * [OUTPUT]: 临时仓库会话归属回归，覆盖有界并行文件扫描、多轮/隔离/检查点中断恢复/外部编辑/冲突/只读快照与真实发送边界
  * [POS]: scripts/ 的 diff 验收层，不读取项目文件内容、不改当前项目 Git 状态，无模型调用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
+import { syncBuiltinESMExports } from 'node:module';
 
 const temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'zcode-session-test-')));
 try {
@@ -66,6 +67,25 @@ try {
     return sessions.review();
   }
 
+  await test('发送前基线有界并行读取文件元数据，避免大仓库逐文件等待', async () => {
+    const { workspace: w, sessions: s } = await fixture();
+    await Promise.all(Array.from({ length: 96 }, (_, i) => save(w, `file-${i}`, 'before\n')));
+    const lstat = fs.default.lstat;
+    let active = 0, peak = 0;
+    fs.default.lstat = async (...args) => {
+      peak = Math.max(peak, ++active);
+      try { await new Promise(resolve => setImmediate(resolve)); return await lstat(...args); }
+      finally { active--; }
+    };
+    syncBuiltinESMExports();
+    try {
+      await s.beginTurn('s1', w);
+      assert.ok(peak > 1, `文件扫描仍然串行：最大并发 ${peak}`);
+      assert.ok(peak <= 64, `文件扫描无并发上限：最大并发 ${peak}`);
+      await save(w, 'file-0', 'after\n'); await s.checkpoint('s1', w, true);
+      assert.deepEqual(await contents(await s.review()), ['before\n', 'after\n']);
+    } finally { fs.default.lstat = lstat; syncBuiltinESMExports(); s.dispose(); }
+  });
   await test('会话基线包含原有暂存/未暂存/新增内容，只统计本轮增量', async () => {
     const { workspace: w, sessions: s } = await fixture();
     await save(w, 'file', 'HEAD\n'); commit(w);
