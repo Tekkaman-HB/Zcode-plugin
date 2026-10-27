@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ./render、./icons、./i18n、./events 的展示类型与 ./format 的用量格式化与 reasoningChoices 三档映射
- * [OUTPUT]: createChatShell（含差异容器与关闭按钮、套餐与上下文圆环同排）、renderWelcome、renderHeaderControls、renderContextRing、renderStatus/renderResponseWait/updateSendStatus；发送准备即时反馈并续接首响等待
+ * [OUTPUT]: createChatShell（任务进度与差异摘要共用工作条、套餐与上下文圆环同排）、renderWelcome、renderHeaderControls、renderContextRing、renderStatus/renderResponseWait/updateSendStatus；发送准备即时反馈并续接首响等待
  * [POS]: webview 的布局层；chat.ts 持有状态，composer.ts 绑定输入行为
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -122,7 +122,7 @@ export function createChatShell(t: Translate, a: ShellActions, quota: HTMLElemen
   const sendBtn = button('send', 'arrowUp', a.send, 'send-btn');
   const jumpBtn = button('latest', 'arrowDown', a.latest, 'jump-latest hidden');
   const composer = h('section', { class: 'composer', 'aria-label': t('composer') }, queuedEl,
-    h('div', { class: 'composer-context' },
+    h('div', { class: 'composer-context' }, todoPanelEl,
       h('div', { class: 'changes-summary hidden', role: 'group' },
         h('div', { class: 'changes-stats' }),
         h('div', { class: 'changes-actions' },
@@ -135,7 +135,7 @@ export function createChatShell(t: Translate, a: ShellActions, quota: HTMLElemen
         h('div', { class: 'composer-bar-left' }, attachBtn, modeBtn),
         h('div', { class: 'composer-bar-right' }, quota, ctxRingBtn, modelBtn, sendBtn))));
   const fragment = document.createDocumentFragment();
-  fragment.append(titlebar, banner, messagesEl, overlayEl, jumpBtn, todoPanelEl, popup, composer);
+  fragment.append(titlebar, banner, messagesEl, overlayEl, jumpBtn, popup, composer);
   return { fragment, banner, messagesEl, overlayEl, todoPanelEl, attachRow, queuedEl, composerInput,
     modelBtn, modeBtn, attachBtn, sendBtn, historyBtn, gearBtn, chatMenuBtn, titleEl, jumpBtn, ctxRingBtn };
 }

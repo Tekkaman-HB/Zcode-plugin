@@ -1,6 +1,6 @@
 /**
  * [INPUT]: ./tokens.css 的语义变量；render/interaction/queue/todoPanel 生成的 DOM 与状态类
- * [OUTPUT]: 消息、段落/代码排版、思考用时/展开文字同色弱化与完成分隔线、居中思考箭头、24px 工具行/跨消息紧凑段距/末条工具与复制同排/命令弱色、四角圆润标题栏/16px 静态语义图标、14px 细描边任务三态与任务扫光文字、diff、权限/问答和任务进度样式
+ * [OUTPUT]: 消息、段落/代码排版、思考用时/展开文字同色弱化与完成分隔线、居中思考箭头、24px 工具行/跨消息紧凑段距/末条工具与复制同排/命令弱色、四角圆润标题栏/16px 静态语义图标、14px 细描边任务三态与任务扫光文字、diff、权限/问答和工作条内无独立外框的任务进度样式
  * [POS]: webview 内容组件层，被 styles.css 导入；折叠与焦点合同由 UI 回归守护
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -173,11 +173,9 @@
 
 /* ═══════════ 进程面板（常驻任务进展，对标桌面端"进程"状态面板） ═══════════ */
 .todo-panel {
-  flex: none; margin: 0 14px 6px; padding: 7px 11px; border-radius: var(--radius-control);
-  background: var(--inset); box-shadow: var(--shadow-hairline);
-  animation: fade-up 220ms var(--ease-out);
+  min-width: 0; padding: 4px 6px 8px;
 }
-.todo-panel-head { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; user-select: none; }
+.todo-panel-head { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 28px; cursor: pointer; user-select: none; }
 /* 展开态：清单在上、把手行在下，分隔线隔开（对标桌面端 todo 卡） */
 .todo-panel.open .todo-panel-head { border-top: 1px solid var(--line-soft); margin-top: 5px; padding-top: 7px; }
 .todo-panel-title { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink-2); }
@@ -185,9 +183,9 @@
 .todo-panel-current { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink); }
 .todo-panel-chevron { flex: none; font-size: 10px; color: var(--ink-3); }
 .todo-panel-list { padding: 4px 2px 1px; }
-/* 关闭按钮：仅全部完成时渲染在 chevron 左侧（16px 圆形幽灵，同 attach-chip-x 风格） */
+/* 关闭按钮：仅全部完成时渲染在行尾，与变更摘要关闭操作对齐。 */
 .todo-panel-close {
-  flex: none; width: 17px; height: 17px; border-radius: 50%; border: none;
+  flex: none; width: 28px; height: 28px; border-radius: var(--radius-control); border: none;
   background: transparent; color: var(--ink-3); cursor: pointer;
   font-size: 12px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
   padding: 0;

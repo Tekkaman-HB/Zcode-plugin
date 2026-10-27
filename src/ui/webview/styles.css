@@ -1,6 +1,6 @@
 /**
  * [INPUT]: ./tokens.css、./content.css 与 shell/composer/menus/panels 的 DOM
- * [OUTPUT]: 导航、一体式输入区（16px 语义权限图标）、20px 整行居中的权限菜单、欢迎页与响应式布局，思考强度横排三档、模型上下文列对齐，底栏套餐与上下文圆环同排居中，变更摘要查看/关闭操作成组布局；MCP 连接绿灯/未连接红灯/未知灰灯；统一处理中文字扫光，减少动态效果/强制颜色模式下静态可读
+ * [OUTPUT]: 导航、一体式输入区（16px 语义权限图标）、20px 整行居中的权限菜单、欢迎页与响应式布局，思考强度横排三档、模型上下文列对齐，底栏套餐与上下文圆环同排居中，任务进度与变更摘要共用工作条外框及条件分隔线、查看/关闭操作成组布局；MCP 连接绿灯/未连接红灯/未知灰灯；统一处理中文字扫光，减少动态效果/强制颜色模式下静态可读
  * [POS]: webview 样式入口；主题令牌在 tokens.css，消息与交互组件在 content.css
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -96,7 +96,9 @@ button:focus-visible, [role="menuitem"]:focus-visible, .ui-choice:focus-visible,
 
 /* ═══════════ 输入区（对标 Prompt Bar：field 底 + 细边 + focus-within 收紧） ═══════════ */
 .composer { flex: none; padding: 8px 12px 12px; min-width: 0; width: 100%; max-width: 792px; margin: 0 auto; }
-.composer-context.has-changes { margin: 0 10px -18px; padding: 6px 6px 18px; border: 1px solid var(--line); border-radius: 20px 20px 0 0; }
+.composer-context:has(> :not(.hidden)) { margin: 0 10px -18px; padding: 6px 6px 18px; border: 1px solid var(--line); border-radius: 20px 20px 0 0; }
+/* 任务与变更共用外框；只有两行同时可见时才显示内部边界。 */
+.composer-context > .todo-panel:not(.hidden) + .changes-summary:not(.hidden) { border-top: 1px solid var(--line-soft); margin-top: 4px; padding-top: 4px; }
 .changes-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; padding: 0 6px 8px; min-width: 0; color: var(--ink-3); font-size: 12px; }
 .changes-stats { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; font-variant-numeric: tabular-nums; }
 .changes-actions { display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
@@ -106,7 +108,7 @@ button:focus-visible, [role="menuitem"]:focus-visible, .ui-choice:focus-visible,
 .changes-review { flex: none; min-height: 28px; padding: 4px 0; border: none; border-radius: 4px; background: transparent; color: var(--ink-3); font: inherit; cursor: pointer; }
 .changes-review:disabled { opacity: .5; cursor: default; }
 .changes-review:hover:not(:disabled) { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
-.composer-context.has-changes + .composer-surface { position: relative; }
+.composer-context:has(> :not(.hidden)) + .composer-surface { position: relative; }
 .composer-inner { display: flex; flex-direction: column; gap: 10px; padding: 14px 14px 2px; }
 .composer-inner:focus-within { border: none; box-shadow: none; }
 .composer-input { display: block; width: 100%; min-height: 50px; max-height: 180px; padding: 0; resize: none; overflow-y: auto; background: transparent; border: none; outline: none; font-family: inherit; font-size: var(--font-size); line-height: 1.6; color: var(--ink); }
